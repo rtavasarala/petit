@@ -8,4 +8,6 @@ pub use core::retry::{RetryCondition, RetryPolicy};
 pub use core::task::{Task, TaskError};
 pub use core::types::{DagId, JobId, RunId, TaskId};
 
-pub use execution::{CommandTask, CommandTaskBuilder, TaskExecutor, TaskResult};
+pub use execution::{
+    CommandTask, CommandTaskBuilder, DagExecutor, DagResult, TaskExecutor, TaskResult, TaskStatus,
+};

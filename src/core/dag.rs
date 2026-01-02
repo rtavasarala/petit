@@ -63,6 +63,7 @@ pub struct TaskNode {
 }
 
 /// A Directed Acyclic Graph of tasks.
+#[derive(Clone)]
 pub struct Dag {
     /// Unique identifier for this DAG.
     id: DagId,
@@ -318,6 +319,21 @@ impl DagBuilder {
     ) -> Self {
         let task_id = TaskId::new(task.name());
         let _ = self.dag.add_task(task);
+        for dep in depends_on {
+            let _ = self.dag.add_dependency(&task_id, &TaskId::new(*dep));
+        }
+        self
+    }
+
+    /// Add a task with dependencies and a condition.
+    pub fn add_task_with_deps_and_condition(
+        mut self,
+        task: Arc<dyn Task>,
+        depends_on: &[&str],
+        condition: TaskCondition,
+    ) -> Self {
+        let task_id = TaskId::new(task.name());
+        let _ = self.dag.add_task_with_condition(task, condition);
         for dep in depends_on {
             let _ = self.dag.add_dependency(&task_id, &TaskId::new(*dep));
         }
