@@ -1,6 +1,7 @@
 pub mod core;
 pub mod events;
 pub mod execution;
+pub mod storage;
 
 pub use core::context::{ContextError, ContextReader, ContextWriter, TaskContext};
 pub use core::dag::{Dag, DagBuilder, DagError, TaskCondition, TaskNode};
@@ -13,4 +14,9 @@ pub use events::{Event, EventBus, EventHandler};
 
 pub use execution::{
     CommandTask, CommandTaskBuilder, DagExecutor, DagResult, TaskExecutor, TaskResult, TaskStatus,
+};
+
+pub use storage::{
+    InMemoryStorage, RunStatus, Storage, StorageError, StoredJob, StoredRun, StoredTaskState,
+    TaskRunStatus,
 };
