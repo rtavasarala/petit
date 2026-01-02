@@ -3,7 +3,7 @@
 //! This test demonstrates the intended user experience before we build
 //! the full YAML parsing infrastructure. It helps validate our API design.
 
-use petit::{DagBuilder, Task, TaskContext, TaskError, TaskId};
+use petit::{DagBuilder, Environment, Task, TaskContext, TaskError, TaskId};
 use async_trait::async_trait;
 use std::sync::Arc;
 
@@ -14,6 +14,12 @@ use std::sync::Arc;
 /// name: etl_pipeline
 /// schedule: "0 0 2 * * *"  # 2 AM daily
 ///
+/// # Job-level environment (inherited by all tasks)
+/// environment:
+///   LOG_LEVEL: info
+///   DATA_DIR: /data
+///
+/// # Job-level config (accessible via context)
 /// config:
 ///   input_path: /data/raw
 ///   output_path: /data/processed
@@ -23,8 +29,9 @@ use std::sync::Arc;
 ///     type: command
 ///     program: python
 ///     args: ["scripts/extract.py", "--input", "${config.input_path}"]
-///     resources:
-///       memory_bytes: 2147483648  # 2GB
+///     environment:
+///       DATABASE_URL: postgres://localhost/source
+///       BATCH_SIZE: "1000"
 ///     retry:
 ///       max_attempts: 3
 ///       delay_seconds: 60
@@ -34,9 +41,8 @@ use std::sync::Arc;
 ///     program: python
 ///     args: ["scripts/transform.py"]
 ///     depends_on: [extract]
-///     resources:
-///       slots:
-///         cpu_intensive: 1
+///     environment:
+///       SPARK_MASTER: local[4]
 ///
 ///   validate:
 ///     type: command
@@ -51,6 +57,8 @@ use std::sync::Arc;
 ///     args: ["-c", "echo 'Pipeline completed!'"]
 ///     depends_on: [validate]
 ///     condition: all_success
+///     environment:
+///       SLACK_WEBHOOK: https://hooks.slack.com/...
 ///
 ///   notify_failure:
 ///     type: command
@@ -67,6 +75,7 @@ struct MockCommandTask {
     name: String,
     program: String,
     args: Vec<String>,
+    env: Environment,
 }
 
 impl MockCommandTask {
@@ -75,6 +84,16 @@ impl MockCommandTask {
             name: name.to_string(),
             program: program.to_string(),
             args: args.into_iter().map(String::from).collect(),
+            env: Environment::new(),
+        })
+    }
+
+    fn with_env(name: &str, program: &str, args: Vec<&str>, env: Environment) -> Arc<dyn Task> {
+        Arc::new(Self {
+            name: name.to_string(),
+            program: program.to_string(),
+            args: args.into_iter().map(String::from).collect(),
+            env,
         })
     }
 }
@@ -86,15 +105,19 @@ impl Task for MockCommandTask {
     }
 
     async fn execute(&self, ctx: &mut TaskContext) -> Result<(), TaskError> {
-        // In real implementation, this would run the command
-        // For now, simulate successful execution
+        // In real implementation, this would run the command with self.env
         println!("Running: {} {:?}", self.program, self.args);
+        println!("Environment: {:?}", self.env.vars());
 
         // Tasks can write outputs for downstream tasks
         ctx.outputs.set("exit_code", 0)?;
         ctx.outputs.set("completed", true)?;
 
         Ok(())
+    }
+
+    fn environment(&self) -> Environment {
+        self.env.clone()
     }
 }
 
@@ -135,6 +158,49 @@ fn test_yaml_like_dag_construction() {
     assert_eq!(names[0], "extract");
     // notify must come last
     assert_eq!(names[3], "notify");
+}
+
+#[test]
+fn test_task_with_environment() {
+    // Demonstrate how environment variables are passed to tasks
+
+    let task_env = Environment::new()
+        .with_var("DATABASE_URL", "postgres://localhost/mydb")
+        .with_var("API_KEY", "secret123")
+        .with_var("LOG_LEVEL", "debug");
+
+    let task = MockCommandTask::with_env(
+        "db_task",
+        "python",
+        vec!["query.py"],
+        task_env,
+    );
+
+    let env = task.environment();
+
+    assert_eq!(env.get("DATABASE_URL"), Some("postgres://localhost/mydb"));
+    assert_eq!(env.get("API_KEY"), Some("secret123"));
+    assert_eq!(env.get("LOG_LEVEL"), Some("debug"));
+}
+
+#[test]
+fn test_environment_merging() {
+    // Job-level environment (from YAML job definition)
+    let job_env = Environment::new()
+        .with_var("LOG_LEVEL", "info")
+        .with_var("DATA_DIR", "/data");
+
+    // Task-level environment (from YAML task definition)
+    let task_env = Environment::new()
+        .with_var("LOG_LEVEL", "debug")  // Override job-level
+        .with_var("DATABASE_URL", "postgres://localhost/db");
+
+    // When executing, job env is merged with task env (task wins)
+    let merged = job_env.merged_with(&task_env);
+
+    assert_eq!(merged.get("LOG_LEVEL"), Some("debug"));  // Task override
+    assert_eq!(merged.get("DATA_DIR"), Some("/data"));    // From job
+    assert_eq!(merged.get("DATABASE_URL"), Some("postgres://localhost/db")); // From task
 }
 
 #[test]
@@ -267,11 +333,15 @@ fn test_config_access() {
 ///     type: command
 ///     program: python
 ///     args: ["fetch_users.py"]
+///     environment:
+///       DB_HOST: users-db.internal
 ///
 ///   fetch_orders:
 ///     type: command
 ///     program: python
 ///     args: ["fetch_orders.py"]
+///     environment:
+///       DB_HOST: orders-db.internal
 ///
 ///   join_data:
 ///     type: command
@@ -284,6 +354,8 @@ fn test_config_access() {
 ///     program: python
 ///     args: ["report.py"]
 ///     depends_on: [join_data]
+///     environment:
+///       OUTPUT_FORMAT: pdf
 /// ```
 #[test]
 fn test_diamond_dependency() {
