@@ -64,30 +64,30 @@
 //! that downstream tasks read as inputs. Outputs are automatically namespaced
 //! by task name.
 //!
+//! When a [`CommandTask`] executes, its stdout and stderr are automatically
+//! captured and stored in the context with keys `{task_name}.stdout` and
+//! `{task_name}.stderr`.
+//!
 //! ```rust
-//! use petit::{CommandTask, TaskContext, ContextReader, ContextWriter, TaskId};
+//! use petit::{ContextReader, ContextWriter, TaskId};
 //! use std::sync::{Arc, RwLock};
 //! use std::collections::HashMap;
 //! use serde_json::Value;
 //!
-//! // When a task runs, its stdout is captured and stored in the context.
-//! // The key is prefixed with the task name: "{task_name}.stdout"
+//! // Create a shared context store (normally managed by the executor)
+//! let store = Arc::new(RwLock::new(HashMap::<String, Value>::new()));
 //!
-//! // Create a command that outputs JSON data
-//! let fetch_users = CommandTask::builder("curl")
-//!     .name("fetch_users")
-//!     .args(["-s", "https://api.example.com/users"])
-//!     .build();
+//! // Upstream task writes output (simulating what CommandTask does internally)
+//! let writer = ContextWriter::new(store.clone(), TaskId::new("extract"));
+//! writer.set("row_count", 1000).unwrap();
+//! writer.set("status", "success").unwrap();
 //!
-//! // After execution, downstream tasks can read the output:
-//! // let users_json: String = ctx.inputs.get("fetch_users.stdout").unwrap();
-//!
-//! // For custom data sharing, tasks can write arbitrary values:
-//! // ctx.outputs.set("record_count", 42)?;
-//! // This creates "task_name.record_count" in the shared store.
-//!
-//! // Downstream tasks read it:
-//! // let count: i32 = ctx.inputs.get("upstream_task.record_count")?;
+//! // Downstream task reads the data using "{upstream_task}.{key}" format
+//! let reader = ContextReader::new(store);
+//! let count: i32 = reader.get("extract.row_count").unwrap();
+//! let status: String = reader.get("extract.status").unwrap();
+//! assert_eq!(count, 1000);
+//! assert_eq!(status, "success");
 //! ```
 //!
 //! # Timeout Handling Patterns
@@ -95,6 +95,12 @@
 //! Timeouts prevent tasks from running indefinitely. When a timeout occurs,
 //! the task returns [`TaskError::Timeout`] which is considered a transient
 //! error and can trigger retries.
+//!
+//! **Process Termination**: When a timeout occurs, the subprocess is terminated
+//! when the underlying command future is dropped. Note that this may not give
+//! the process time for graceful shutdown. If your command requires cleanup,
+//! consider implementing signal handling within the command itself or using
+//! shorter timeouts with retry policies.
 //!
 //! ```rust
 //! use petit::{CommandTask, RetryPolicy, RetryCondition};
@@ -170,29 +176,32 @@
 //!   command cannot be started (e.g., program not found)
 //!
 //! ```rust
-//! use petit::{CommandTask, Task, TaskError};
+//! use petit::TaskError;
+//! use std::time::Duration;
 //!
-//! // Handling different error types
-//! async fn run_with_error_handling(task: &CommandTask) {
-//!     // This example shows error handling patterns
-//!     // In practice, use ctx from TaskContext
-//!     # /*
-//!     let result = task.execute(&mut ctx).await;
-//!     match result {
-//!         Ok(()) => println!("Task succeeded"),
-//!         Err(TaskError::CommandFailed { code, stderr }) => {
+//! // Example: checking error types for appropriate handling
+//! fn handle_task_error(err: TaskError) {
+//!     match err {
+//!         TaskError::CommandFailed { code, stderr } => {
 //!             eprintln!("Command failed with exit code {}: {}", code, stderr);
 //!         }
-//!         Err(TaskError::Timeout(duration)) => {
+//!         TaskError::Timeout(duration) => {
 //!             eprintln!("Command timed out after {:?}", duration);
+//!             // Timeout errors are transient - retry may succeed
 //!         }
-//!         Err(TaskError::ExecutionFailed(msg)) => {
+//!         TaskError::ExecutionFailed(msg) => {
 //!             eprintln!("Failed to execute: {}", msg);
 //!         }
-//!         Err(e) => eprintln!("Other error: {}", e),
+//!         _ => eprintln!("Other error: {}", err),
 //!     }
-//!     # */
 //! }
+//!
+//! // Check if an error is transient (suitable for retry)
+//! let timeout_err = TaskError::Timeout(Duration::from_secs(30));
+//! assert!(timeout_err.is_transient());
+//!
+//! let cmd_err = TaskError::CommandFailed { code: 1, stderr: "error".into() };
+//! assert!(!cmd_err.is_transient());
 //! ```
 
 use async_trait::async_trait;
@@ -698,31 +707,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_long_running_command_timeout_cleanup() {
+    async fn test_long_running_command_timeout_completes_quickly() {
         // This test verifies that when a timeout occurs on a long-running command,
-        // the subprocess is properly terminated and doesn't continue running.
-        //
-        // We use a shell script that:
-        // 1. Writes its PID to a temp file
-        // 2. Traps SIGTERM to detect termination
-        // 3. Sleeps indefinitely
-        //
-        // After timeout, we verify the process is no longer running.
-        use std::fs;
-        use std::path::Path;
-
-        let pid_file = "/tmp/petit_timeout_test_pid";
-
-        // Clean up any previous test artifacts
-        let _ = fs::remove_file(pid_file);
-
-        let task = CommandTask::builder("sh")
-            .arg("-c")
-            // Script that writes PID and sleeps
-            .arg(format!(
-                "echo $$ > {} && sleep 60",
-                pid_file
-            ))
+        // we return promptly rather than waiting for the command to complete.
+        // This ensures the timeout mechanism works correctly for commands that
+        // would otherwise run much longer than the timeout duration.
+        let task = CommandTask::builder("sleep")
+            .arg("60") // Would take 60 seconds without timeout
             .timeout(Duration::from_millis(200))
             .build();
 
@@ -740,40 +731,13 @@ mod tests {
             other => panic!("Expected Timeout, got {:?}", other),
         }
 
-        // Should have completed quickly (timeout + some margin)
+        // Should have completed quickly (timeout + some margin), not 60 seconds
         assert!(
             elapsed < Duration::from_secs(1),
-            "Timeout took too long: {:?}",
+            "Timeout took too long: {:?}. Expected ~200ms, got {:?}",
+            elapsed,
             elapsed
         );
-
-        // Give a small delay for process cleanup
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
-        // Verify the PID file was created (process started)
-        if Path::new(pid_file).exists() {
-            let pid_str = fs::read_to_string(pid_file).unwrap();
-            let pid: i32 = pid_str.trim().parse().unwrap();
-
-            // Check if process is still running (it shouldn't be after tokio kills it)
-            // On Unix, sending signal 0 checks if process exists
-            let process_running = unsafe { libc::kill(pid, 0) == 0 };
-
-            // Note: tokio's timeout doesn't guarantee immediate process termination,
-            // but the child process should be dropped when the Command future is dropped.
-            // This is a best-effort check.
-            if process_running {
-                // If still running, that's concerning but not necessarily a bug
-                // since process cleanup is OS-dependent
-                eprintln!(
-                    "Warning: Process {} may still be running after timeout",
-                    pid
-                );
-            }
-
-            // Clean up
-            let _ = fs::remove_file(pid_file);
-        }
     }
 
     #[tokio::test]
