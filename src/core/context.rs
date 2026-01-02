@@ -143,6 +143,18 @@ impl ContextReader {
             .map(|s| s.keys().cloned().collect())
             .unwrap_or_default()
     }
+
+    /// Clone the entire store contents.
+    pub fn clone_store(&self) -> Option<HashMap<String, Value>> {
+        self.store.read().ok().map(|s| s.clone())
+    }
+
+    /// Set a raw value in the store (used for merging contexts).
+    pub fn set_raw(&self, key: &str, value: Value) -> Result<(), ContextError> {
+        let mut store = self.store.write().map_err(|_| ContextError::LockPoisoned)?;
+        store.insert(key.to_string(), value);
+        Ok(())
+    }
 }
 
 impl ContextWriter {
