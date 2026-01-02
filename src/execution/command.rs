@@ -1,48 +1,210 @@
 //! External command task implementation.
 //!
-//! `CommandTask` wraps shell commands and external executables, allowing them
-//! to be used as tasks in a DAG.
+//! [`CommandTask`] wraps shell commands and external executables, allowing them
+//! to be used as tasks in a DAG. This module provides a builder pattern for
+//! configuring commands with arguments, environment variables, timeouts, and
+//! retry policies.
 //!
-//! # Security Considerations
+//! # Quick Start
 //!
-//! Commands are executed directly without shell expansion, which provides some
-//! protection against injection attacks. However, users should be aware of
-//! the following security considerations:
+//! ```rust
+//! use petit::CommandTask;
+//! use std::time::Duration;
 //!
-//! - **Program Path**: No validation is performed on the program path. Any
-//!   binary accessible to the process can be executed. Consider validating
-//!   program paths against an allowlist in security-sensitive environments.
+//! // Simple command
+//! let task = CommandTask::builder("echo")
+//!     .arg("hello")
+//!     .build();
 //!
-//! - **Arguments**: Arguments are passed directly to the executable without
-//!   sanitization. Never construct arguments from untrusted user input without
-//!   proper validation.
-//!
-//! - **Environment Variables**: Environment variables are passed through without
-//!   validation. Be cautious about exposing sensitive data through environment
-//!   variables, and avoid passing secrets in plain text.
-//!
-//! - **Inherited Environment**: The `PATH` and other system environment variables
-//!   are inherited from the parent process unless explicitly overridden.
-//!
-//! ## Example: Unsafe Pattern
-//!
-//! ```ignore
-//! // UNSAFE: Never do this with untrusted input
-//! let user_input = get_untrusted_input();
-//! let task = CommandTask::builder("sh")
-//!     .arg("-c")
-//!     .arg(format!("echo {}", user_input)) // Command injection risk!
+//! // Command with timeout and retry
+//! let robust_task = CommandTask::builder("curl")
+//!     .args(["-s", "https://api.example.com/health"])
+//!     .timeout(Duration::from_secs(30))
 //!     .build();
 //! ```
 //!
-//! ## Example: Safer Pattern
+//! # Multi-Stage Pipeline Example
 //!
-//! ```ignore
-//! // SAFER: Pass data as separate arguments, not shell-interpreted strings
-//! let user_input = get_untrusted_input();
-//! let task = CommandTask::builder("echo")
-//!     .arg(&user_input) // Passed directly to echo, no shell interpretation
+//! A typical ETL pipeline with extract, transform, and load stages:
+//!
+//! ```rust
+//! use petit::{CommandTask, Environment, RetryPolicy};
+//! use std::time::Duration;
+//!
+//! // Stage 1: Extract data from source
+//! let extract = CommandTask::builder("python")
+//!     .name("extract_data")
+//!     .args(["-m", "etl.extract", "--source", "s3://bucket/raw"])
+//!     .env("AWS_REGION", "us-east-1")
+//!     .timeout(Duration::from_secs(300))
+//!     .retry_policy(RetryPolicy::fixed(3, Duration::from_secs(10)))
 //!     .build();
+//!
+//! // Stage 2: Transform data
+//! let transform = CommandTask::builder("python")
+//!     .name("transform_data")
+//!     .args(["-m", "etl.transform", "--output", "/tmp/processed"])
+//!     .working_dir("/app")
+//!     .timeout(Duration::from_secs(600))
+//!     .build();
+//!
+//! // Stage 3: Load to destination
+//! // Note: env vars are passed as literal strings, not shell-expanded.
+//! // To pass through a parent env var, read it explicitly:
+//! let db_password = std::env::var("DB_PASSWORD").unwrap_or_default();
+//! let load = CommandTask::builder("python")
+//!     .name("load_data")
+//!     .args(["-m", "etl.load", "--dest", "postgres://db/warehouse"])
+//!     .env("DB_PASSWORD", db_password)
+//!     .timeout(Duration::from_secs(300))
+//!     .retry_policy(RetryPolicy::fixed(2, Duration::from_secs(30)))
+//!     .build();
+//! ```
+//!
+//! # Passing Data Between Tasks
+//!
+//! Tasks communicate through a shared context store. Each task can write outputs
+//! that downstream tasks read as inputs. Outputs are automatically namespaced
+//! by task name.
+//!
+//! When a [`CommandTask`] executes, its stdout and stderr are automatically
+//! captured and stored in the context with keys `{task_name}.stdout` and
+//! `{task_name}.stderr`.
+//!
+//! ```rust
+//! use petit::{ContextReader, ContextWriter, TaskId};
+//! use std::sync::{Arc, RwLock};
+//! use std::collections::HashMap;
+//! use serde_json::Value;
+//!
+//! // Create a shared context store (normally managed by the executor)
+//! let store = Arc::new(RwLock::new(HashMap::<String, Value>::new()));
+//!
+//! // Upstream task writes output (simulating what CommandTask does internally)
+//! let writer = ContextWriter::new(store.clone(), TaskId::new("extract"));
+//! writer.set("row_count", 1000).unwrap();
+//! writer.set("status", "success").unwrap();
+//!
+//! // Downstream task reads the data using "{upstream_task}.{key}" format
+//! let reader = ContextReader::new(store);
+//! let count: i32 = reader.get("extract.row_count").unwrap();
+//! let status: String = reader.get("extract.status").unwrap();
+//! assert_eq!(count, 1000);
+//! assert_eq!(status, "success");
+//! ```
+//!
+//! # Timeout Handling Patterns
+//!
+//! Timeouts prevent tasks from running indefinitely. When a timeout occurs,
+//! the task returns [`TaskError::Timeout`] which is considered a transient
+//! error and can trigger retries.
+//!
+//! **Process Termination**: When a timeout occurs, the subprocess is terminated
+//! when the underlying command future is dropped. Note that this may not give
+//! the process time for graceful shutdown. If your command requires cleanup,
+//! consider implementing signal handling within the command itself or using
+//! shorter timeouts with retry policies.
+//!
+//! ```rust
+//! use petit::{CommandTask, RetryPolicy, RetryCondition};
+//! use std::time::Duration;
+//!
+//! // Basic timeout - task fails if not complete within 30 seconds
+//! let quick_task = CommandTask::builder("./check_health.sh")
+//!     .timeout(Duration::from_secs(30))
+//!     .build();
+//!
+//! // Timeout with retry - retries on timeout up to 3 times
+//! let resilient_task = CommandTask::builder("./process_batch.sh")
+//!     .timeout(Duration::from_secs(60))
+//!     .retry_policy(
+//!         RetryPolicy::fixed(3, Duration::from_secs(5))
+//!             .with_condition(RetryCondition::TransientOnly)
+//!     )
+//!     .build();
+//!
+//! // Long-running task with generous timeout
+//! let batch_job = CommandTask::builder("python")
+//!     .name("nightly_batch")
+//!     .args(["-m", "batch.process", "--full"])
+//!     .timeout(Duration::from_secs(3600))  // 1 hour
+//!     .build();
+//! ```
+//!
+//! # Environment Variable Patterns
+//!
+//! Environment variables can be set at multiple levels and are passed to
+//! the subprocess when the command executes.
+//!
+//! ```rust
+//! use petit::{CommandTask, Environment};
+//!
+//! // Single environment variable using fluent builder
+//! let task = CommandTask::builder("./deploy.sh")
+//!     .env("ENVIRONMENT", "production")
+//!     .env("LOG_LEVEL", "info")
+//!     .build();
+//!
+//! // Multiple variables from an Environment object
+//! let env = Environment::new()
+//!     .with_var("DATABASE_URL", "postgres://localhost/mydb")
+//!     .with_var("REDIS_URL", "redis://localhost:6379")
+//!     .with_var("API_KEY", "secret123");
+//!
+//! let task_with_env = CommandTask::builder("python")
+//!     .args(["-m", "app.main"])
+//!     .environment(env)
+//!     .build();
+//!
+//! // Combining job-level and task-level environment variables
+//! // In YAML configuration, variables merge with task-level taking precedence:
+//! // ```yaml
+//! // environment:  # Job-level
+//! //   LOG_LEVEL: info
+//! // tasks:
+//! //   - id: my_task
+//! //     environment:  # Task-level (overrides job-level)
+//! //       LOG_LEVEL: debug
+//! // ```
+//! ```
+//!
+//! # Error Handling
+//!
+//! [`CommandTask`] can fail in several ways:
+//!
+//! - **Non-zero exit code**: Returns [`TaskError::CommandFailed`] with the exit
+//!   code and stderr output
+//! - **Timeout**: Returns [`TaskError::Timeout`] (transient, can retry)
+//! - **Execution failure**: Returns [`TaskError::ExecutionFailed`] if the
+//!   command cannot be started (e.g., program not found)
+//!
+//! ```rust
+//! use petit::TaskError;
+//! use std::time::Duration;
+//!
+//! // Example: checking error types for appropriate handling
+//! fn handle_task_error(err: TaskError) {
+//!     match err {
+//!         TaskError::CommandFailed { code, stderr } => {
+//!             eprintln!("Command failed with exit code {}: {}", code, stderr);
+//!         }
+//!         TaskError::Timeout(duration) => {
+//!             eprintln!("Command timed out after {:?}", duration);
+//!             // Timeout errors are transient - retry may succeed
+//!         }
+//!         TaskError::ExecutionFailed(msg) => {
+//!             eprintln!("Failed to execute: {}", msg);
+//!         }
+//!         _ => eprintln!("Other error: {}", err),
+//!     }
+//! }
+//!
+//! // Check if an error is transient (suitable for retry)
+//! let timeout_err = TaskError::Timeout(Duration::from_secs(30));
+//! assert!(timeout_err.is_transient());
+//!
+//! let cmd_err = TaskError::CommandFailed { code: 1, stderr: "error".into() };
+//! assert!(!cmd_err.is_transient());
 //! ```
 
 use async_trait::async_trait;
@@ -109,7 +271,7 @@ impl CommandTask {
     }
 
     /// Get the timeout duration.
-    pub fn timeout_duration(&self) -> Option<Duration> {
+    pub fn timeout(&self) -> Option<Duration> {
         self.timeout
     }
 }
@@ -544,6 +706,58 @@ mod tests {
         assert_eq!(task.program(), "python");
         assert_eq!(task.args(), &["-c", "print('hello')"]);
         assert_eq!(task.working_dir(), Some(&PathBuf::from("/tmp")));
-        assert_eq!(task.timeout_duration(), Some(Duration::from_secs(30)));
+        assert_eq!(task.timeout(), Some(Duration::from_secs(30)));
+    }
+
+    #[tokio::test]
+    async fn test_long_running_command_timeout_completes_quickly() {
+        // This test verifies that when a timeout occurs on a long-running command,
+        // we return promptly rather than waiting for the command to complete.
+        // This ensures the timeout mechanism works correctly for commands that
+        // would otherwise run much longer than the timeout duration.
+        let task = CommandTask::builder("sleep")
+            .arg("60") // Would take 60 seconds without timeout
+            .timeout(Duration::from_millis(200))
+            .build();
+
+        let mut ctx = create_test_context();
+        let start = std::time::Instant::now();
+        let result = task.execute(&mut ctx).await;
+        let elapsed = start.elapsed();
+
+        // Should have timed out
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            TaskError::Timeout(duration) => {
+                assert_eq!(duration, Duration::from_millis(200));
+            }
+            other => panic!("Expected Timeout, got {:?}", other),
+        }
+
+        // Should have completed quickly (timeout + some margin), not 60 seconds
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "Timeout took too long: {:?}. Expected ~200ms, got {:?}",
+            elapsed,
+            elapsed
+        );
+    }
+
+    #[tokio::test]
+    async fn test_timeout_returns_correct_error_type() {
+        // Verify that timeout errors are marked as transient (retriable)
+        let task = CommandTask::builder("sleep")
+            .arg("60")
+            .timeout(Duration::from_millis(50))
+            .build();
+
+        let mut ctx = create_test_context();
+        let result = task.execute(&mut ctx).await;
+
+        let err = result.unwrap_err();
+        assert!(
+            err.is_transient(),
+            "Timeout errors should be transient for retry purposes"
+        );
     }
 }
