@@ -195,8 +195,8 @@ pub struct Scheduler<S: Storage> {
     tick_interval: Duration,
     /// Maximum concurrent jobs overall (None = unlimited).
     max_concurrent_jobs: Option<usize>,
-    /// Currently running job handles.
-    running_jobs: Arc<RwLock<HashMap<RunId, JoinHandle<()>>>>,
+    /// Currently running job handles mapped to (JobId, Handle).
+    running_jobs: Arc<RwLock<HashMap<RunId, (JobId, JoinHandle<()>)>>>,
 }
 
 impl<S: Storage + 'static> Scheduler<S> {
@@ -528,24 +528,27 @@ impl<S: Storage + 'static> Scheduler<S> {
         });
 
         // Track the running job
-        self.running_jobs.write().await.insert(run_id.clone(), handle);
+        self.running_jobs
+            .write()
+            .await
+            .insert(run_id.clone(), (job_id.clone(), handle));
 
         Ok(run_id)
     }
 
     /// Count running instances of a specific job.
     async fn count_running_for_job(&self, job_id: &JobId) -> Result<usize, SchedulerError> {
-        let runs = self.storage.list_runs(job_id, 100).await?;
-        Ok(runs
-            .iter()
-            .filter(|r| r.status == RunStatus::Running)
+        let running = self.running_jobs.read().await;
+        Ok(running
+            .values()
+            .filter(|(jid, _)| jid == job_id)
             .count())
     }
 
     /// Clean up finished job handles.
     async fn cleanup_finished_jobs(&self) {
         let mut running = self.running_jobs.write().await;
-        running.retain(|_, handle| !handle.is_finished());
+        running.retain(|_, (_, handle)| !handle.is_finished());
     }
 }
 
