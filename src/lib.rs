@@ -2,6 +2,7 @@ pub mod config;
 pub mod core;
 pub mod events;
 pub mod execution;
+pub mod scheduler;
 pub mod storage;
 pub mod testing;
 
@@ -36,3 +37,4 @@ pub use testing::{
     ExecutionTracker, FailingTask, FailureInjection, MockTaskContext, TestHarness, TestResult,
     Timeline, TimelineEntry, TimelineEventType, TrackedTask,
 };
+pub use scheduler::{Scheduler, SchedulerError, SchedulerHandle, SchedulerState};
