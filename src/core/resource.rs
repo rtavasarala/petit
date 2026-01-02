@@ -32,65 +32,88 @@ pub struct SystemResources {
 impl ResourceRequirements {
     /// Create empty resource requirements (no constraints).
     pub fn none() -> Self {
-        todo!()
+        Self::default()
     }
 
     /// Create requirements with only slot constraints.
     pub fn slots(slots: HashMap<String, u32>) -> Self {
-        todo!()
+        Self {
+            slots,
+            system: SystemResources::default(),
+        }
     }
 
     /// Create requirements with only system constraints.
     pub fn system(system: SystemResources) -> Self {
-        todo!()
+        Self {
+            slots: HashMap::new(),
+            system,
+        }
     }
 
     /// Builder: add a slot requirement.
-    pub fn with_slot(self, name: impl Into<String>, count: u32) -> Self {
-        todo!()
+    pub fn with_slot(mut self, name: impl Into<String>, count: u32) -> Self {
+        self.slots.insert(name.into(), count);
+        self
     }
 
     /// Builder: set CPU cores requirement.
-    pub fn with_cpu(self, cores: f32) -> Self {
-        todo!()
+    pub fn with_cpu(mut self, cores: f32) -> Self {
+        self.system.cpu_cores = Some(cores);
+        self
     }
 
     /// Builder: set memory requirement in bytes.
-    pub fn with_memory(self, bytes: u64) -> Self {
-        todo!()
+    pub fn with_memory(mut self, bytes: u64) -> Self {
+        self.system.memory_bytes = Some(bytes);
+        self
     }
 
     /// Check if this has any requirements.
     pub fn is_empty(&self) -> bool {
-        todo!()
+        self.slots.is_empty()
+            && self.system.cpu_cores.is_none()
+            && self.system.memory_bytes.is_none()
     }
 }
 
 impl SystemResources {
     /// Create empty system resources (no constraints).
     pub fn none() -> Self {
-        todo!()
+        Self::default()
     }
 
     /// Create with CPU constraint only.
     pub fn cpu(cores: f32) -> Self {
-        todo!()
+        Self {
+            cpu_cores: Some(cores),
+            memory_bytes: None,
+        }
     }
 
     /// Create with memory constraint only.
     pub fn memory(bytes: u64) -> Self {
-        todo!()
+        Self {
+            cpu_cores: None,
+            memory_bytes: Some(bytes),
+        }
     }
 
     /// Create with both CPU and memory constraints.
     pub fn new(cpu_cores: Option<f32>, memory_bytes: Option<u64>) -> Self {
-        todo!()
+        Self {
+            cpu_cores,
+            memory_bytes,
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const MB: u64 = 1024 * 1024;
+    const GB: u64 = 1024 * 1024 * 1024;
 
     #[test]
     fn test_default_requirements_are_empty() {
@@ -117,10 +140,10 @@ mod tests {
     fn test_requirements_with_system_resources() {
         let req = ResourceRequirements::none()
             .with_cpu(2.5)
-            .with_memory(1024 * 1024 * 512); // 512 MB
+            .with_memory(512 * MB);
 
         assert_eq!(req.system.cpu_cores, Some(2.5));
-        assert_eq!(req.system.memory_bytes, Some(536_870_912));
+        assert_eq!(req.system.memory_bytes, Some(512 * MB));
     }
 
     #[test]
@@ -128,11 +151,11 @@ mod tests {
         let req = ResourceRequirements::none()
             .with_slot("gpu", 1)
             .with_cpu(4.0)
-            .with_memory(1024 * 1024 * 1024); // 1 GB
+            .with_memory(GB);
 
         assert_eq!(req.slots.get("gpu"), Some(&1));
         assert_eq!(req.system.cpu_cores, Some(4.0));
-        assert_eq!(req.system.memory_bytes, Some(1_073_741_824));
+        assert_eq!(req.system.memory_bytes, Some(GB));
     }
 
     #[test]
