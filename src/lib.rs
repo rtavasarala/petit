@@ -4,6 +4,7 @@ pub mod events;
 pub mod execution;
 pub mod scheduler;
 pub mod storage;
+pub mod testing;
 
 pub use core::context::{ContextError, ContextReader, ContextWriter, TaskContext};
 pub use core::dag::{Dag, DagBuilder, DagError, TaskCondition, TaskNode};
@@ -32,4 +33,8 @@ pub use config::{
     ConfigError, GlobalConfig, JobConfig, RetryConfig, ScheduleConfig, TaskConfig, YamlLoader,
 };
 
+pub use testing::{
+    ExecutionTracker, FailingTask, FailureInjection, MockTaskContext, TestHarness, TestResult,
+    Timeline, TimelineEntry, TimelineEventType, TrackedTask,
+};
 pub use scheduler::{Scheduler, SchedulerError, SchedulerHandle, SchedulerState};
