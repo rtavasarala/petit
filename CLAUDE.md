@@ -30,7 +30,16 @@ src/
 
 ## Development Approach
 
-**Test-driven development**: Tests are written first as executable documentation defining the API contract. Implementation follows to make tests pass.
+**Test-driven development (TDD)**:
+- Write tests first that define the API contract
+- Tests serve as executable documentation
+- Implementation follows to make tests pass
+- Red-green-refactor cycle
+
+**Git workflow**:
+- Use feature branches for new features/phases
+- Small edits can go directly to main
+- Create PRs for significant changes
 
 See `PLAN.md` for the phased implementation plan.
 See `SPEC.md` for detailed technical specification.
