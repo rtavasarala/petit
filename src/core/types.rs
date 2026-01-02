@@ -34,6 +34,18 @@ impl TaskId {
     }
 }
 
+impl From<&str> for TaskId {
+    fn from(s: &str) -> Self {
+        Self::new(s)
+    }
+}
+
+impl From<String> for TaskId {
+    fn from(s: String) -> Self {
+        Self::new(s)
+    }
+}
+
 impl JobId {
     /// Create a new JobId from a string.
     pub fn new(id: impl Into<String>) -> Self {
@@ -43,6 +55,18 @@ impl JobId {
     /// Get the underlying string value.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl From<&str> for JobId {
+    fn from(s: &str) -> Self {
+        Self::new(s)
+    }
+}
+
+impl From<String> for JobId {
+    fn from(s: String) -> Self {
+        Self::new(s)
     }
 }
 
@@ -78,6 +102,18 @@ impl DagId {
     /// Get the underlying string value.
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl From<&str> for DagId {
+    fn from(s: &str) -> Self {
+        Self::new(s)
+    }
+}
+
+impl From<String> for DagId {
+    fn from(s: String) -> Self {
+        Self::new(s)
     }
 }
 
@@ -169,5 +205,26 @@ mod tests {
         task_ids.insert(TaskId::new("task1")); // duplicate
 
         assert_eq!(task_ids.len(), 2);
+    }
+
+    #[test]
+    fn test_task_id_from_str() {
+        let id1: TaskId = "my_task".into();
+        let id2 = TaskId::new("my_task");
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn test_job_id_from_str() {
+        let id1: JobId = "my_job".into();
+        let id2 = JobId::new("my_job");
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn test_dag_id_from_str() {
+        let id1: DagId = "my_dag".into();
+        let id2 = DagId::new("my_dag");
+        assert_eq!(id1, id2);
     }
 }

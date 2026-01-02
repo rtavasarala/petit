@@ -112,6 +112,9 @@ impl SystemResources {
 mod tests {
     use super::*;
 
+    const MB: u64 = 1024 * 1024;
+    const GB: u64 = 1024 * 1024 * 1024;
+
     #[test]
     fn test_default_requirements_are_empty() {
         let req = ResourceRequirements::default();
@@ -137,10 +140,10 @@ mod tests {
     fn test_requirements_with_system_resources() {
         let req = ResourceRequirements::none()
             .with_cpu(2.5)
-            .with_memory(1024 * 1024 * 512); // 512 MB
+            .with_memory(512 * MB);
 
         assert_eq!(req.system.cpu_cores, Some(2.5));
-        assert_eq!(req.system.memory_bytes, Some(536_870_912));
+        assert_eq!(req.system.memory_bytes, Some(512 * MB));
     }
 
     #[test]
@@ -148,11 +151,11 @@ mod tests {
         let req = ResourceRequirements::none()
             .with_slot("gpu", 1)
             .with_cpu(4.0)
-            .with_memory(1024 * 1024 * 1024); // 1 GB
+            .with_memory(GB);
 
         assert_eq!(req.slots.get("gpu"), Some(&1));
         assert_eq!(req.system.cpu_cores, Some(4.0));
-        assert_eq!(req.system.memory_bytes, Some(1_073_741_824));
+        assert_eq!(req.system.memory_bytes, Some(GB));
     }
 
     #[test]

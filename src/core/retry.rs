@@ -10,7 +10,9 @@ use std::time::Duration;
 /// Defines how a task should be retried on failure.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RetryPolicy {
-    /// Maximum number of retry attempts (0 = no retries).
+    /// Maximum number of retry attempts, not including the initial attempt (0 = no retries).
+    /// For example, `max_attempts = 3` means up to 3 retries after the initial failure,
+    /// for a total of 4 attempts (1 initial + 3 retries).
     pub max_attempts: u32,
 
     /// Fixed delay between retry attempts.
@@ -76,7 +78,7 @@ impl RetryPolicy {
         if self.retry_on == RetryCondition::Never {
             return false;
         }
-        attempts <= self.max_attempts
+        attempts < self.max_attempts
     }
 
     /// Get the delay before the next retry.
@@ -99,6 +101,8 @@ impl Default for RetryCondition {
 }
 
 /// Serde helper for Duration serialization.
+///
+/// Serializes Duration as seconds (matching YAML config format).
 mod serde_duration {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
     use std::time::Duration;
@@ -107,15 +111,15 @@ mod serde_duration {
     where
         S: Serializer,
     {
-        duration.as_millis().serialize(serializer)
+        duration.as_secs().serialize(serializer)
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Duration, D::Error>
     where
         D: Deserializer<'de>,
     {
-        let millis = u64::deserialize(deserializer)?;
-        Ok(Duration::from_millis(millis))
+        let secs = u64::deserialize(deserializer)?;
+        Ok(Duration::from_secs(secs))
     }
 }
 
@@ -153,16 +157,16 @@ mod tests {
     fn test_should_retry_respects_max_attempts() {
         let policy = RetryPolicy::fixed(3, Duration::from_secs(1));
 
-        // After 1st attempt (failed), should retry
+        // Initial attempt failed (attempts=1), should allow first retry
         assert!(policy.should_retry(1));
 
-        // After 2nd attempt, should retry
+        // First retry failed (attempts=2), should allow second retry
         assert!(policy.should_retry(2));
 
-        // After 3rd attempt, should retry (this will be the 4th try)
-        assert!(policy.should_retry(3));
+        // Second retry failed (attempts=3), should NOT retry (reached max_attempts)
+        assert!(!policy.should_retry(3));
 
-        // After 4th attempt, should NOT retry (exceeded max_attempts)
+        // Third attempt would exceed max_attempts
         assert!(!policy.should_retry(4));
     }
 
