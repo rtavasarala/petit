@@ -3,6 +3,7 @@ pub mod core;
 pub mod events;
 pub mod execution;
 pub mod storage;
+pub mod testing;
 
 pub use core::context::{ContextError, ContextReader, ContextWriter, TaskContext};
 pub use core::dag::{Dag, DagBuilder, DagError, TaskCondition, TaskNode};
@@ -29,4 +30,9 @@ pub use storage::SqliteStorage;
 
 pub use config::{
     ConfigError, GlobalConfig, JobConfig, RetryConfig, ScheduleConfig, TaskConfig, YamlLoader,
+};
+
+pub use testing::{
+    ExecutionTracker, FailingTask, FailureInjection, MockTaskContext, TestHarness, TestResult,
+    Timeline, TimelineEntry, TimelineEventType, TrackedTask,
 };
