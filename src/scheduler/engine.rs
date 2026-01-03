@@ -512,7 +512,8 @@ impl<S: Storage + 'static> Scheduler<S> {
 
                     // Check if the run is within the window
                     if let Some(ended_at) = last_run.ended_at {
-                        let elapsed = ended_at.elapsed().unwrap_or(Duration::MAX);
+                        let now = std::time::SystemTime::now();
+                        let elapsed = now.duration_since(ended_at).unwrap_or(Duration::MAX);
                         if elapsed > *window {
                             return false;
                         }
