@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::RwLock;
-use tracing::{debug, info_span, Instrument};
+use tracing::{Instrument, debug, info_span};
 
 use crate::core::context::TaskContext;
 use crate::core::dag::{Dag, TaskCondition};
@@ -147,9 +147,12 @@ impl DagExecutor {
             if ready_tasks.is_empty() {
                 // Check if we're done or deadlocked
                 let statuses_read = statuses.read().await;
-                let all_done = statuses_read
-                    .values()
-                    .all(|s| matches!(s, TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Skipped));
+                let all_done = statuses_read.values().all(|s| {
+                    matches!(
+                        s,
+                        TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Skipped
+                    )
+                });
 
                 if all_done {
                     debug!(dag = %dag_id, "all tasks completed");
@@ -262,7 +265,9 @@ impl DagExecutor {
                         let exit_code: Option<i32> = task_store
                             .read()
                             .ok()
-                            .and_then(|s| s.get(&format!("{}.exit_code", task_id.as_str())).cloned())
+                            .and_then(|s| {
+                                s.get(&format!("{}.exit_code", task_id.as_str())).cloned()
+                            })
                             .and_then(|v| serde_json::from_value(v).ok());
 
                         // Emit TaskCompleted or TaskFailed event
@@ -368,7 +373,9 @@ impl DagExecutor {
             let deps_satisfied = deps.iter().all(|dep_id| {
                 matches!(
                     statuses_read.get(dep_id),
-                    Some(TaskStatus::Completed) | Some(TaskStatus::Failed) | Some(TaskStatus::Skipped)
+                    Some(TaskStatus::Completed)
+                        | Some(TaskStatus::Failed)
+                        | Some(TaskStatus::Skipped)
                 )
             });
 
@@ -397,24 +404,20 @@ impl DagExecutor {
     ) -> bool {
         match condition {
             TaskCondition::Always => true,
-            TaskCondition::AllSuccess => {
-                dependencies
-                    .iter()
-                    .all(|dep| statuses.get(dep) == Some(&TaskStatus::Completed))
-            }
-            TaskCondition::OnFailure => {
-                dependencies
-                    .iter()
-                    .any(|dep| statuses.get(dep) == Some(&TaskStatus::Failed))
-            }
-            TaskCondition::AllDone => {
-                dependencies.iter().all(|dep| {
-                    matches!(
-                        statuses.get(dep),
-                        Some(TaskStatus::Completed) | Some(TaskStatus::Failed) | Some(TaskStatus::Skipped)
-                    )
-                })
-            }
+            TaskCondition::AllSuccess => dependencies
+                .iter()
+                .all(|dep| statuses.get(dep) == Some(&TaskStatus::Completed)),
+            TaskCondition::OnFailure => dependencies
+                .iter()
+                .any(|dep| statuses.get(dep) == Some(&TaskStatus::Failed)),
+            TaskCondition::AllDone => dependencies.iter().all(|dep| {
+                matches!(
+                    statuses.get(dep),
+                    Some(TaskStatus::Completed)
+                        | Some(TaskStatus::Failed)
+                        | Some(TaskStatus::Skipped)
+                )
+            }),
         }
     }
 
@@ -439,7 +442,9 @@ impl DagExecutor {
             let deps_done = deps.iter().all(|dep_id| {
                 matches!(
                     statuses_write.get(dep_id),
-                    Some(TaskStatus::Completed) | Some(TaskStatus::Failed) | Some(TaskStatus::Skipped)
+                    Some(TaskStatus::Completed)
+                        | Some(TaskStatus::Failed)
+                        | Some(TaskStatus::Skipped)
                 )
             });
 
@@ -492,7 +497,9 @@ mod tests {
 
     impl SimpleTask {
         fn new(name: &str) -> Arc<Self> {
-            Arc::new(Self { name: name.to_string() })
+            Arc::new(Self {
+                name: name.to_string(),
+            })
         }
     }
 
@@ -515,7 +522,9 @@ mod tests {
 
     impl FailingTask {
         fn new(name: &str) -> Arc<Self> {
-            Arc::new(Self { name: name.to_string() })
+            Arc::new(Self {
+                name: name.to_string(),
+            })
         }
     }
 
@@ -526,7 +535,9 @@ mod tests {
         }
 
         async fn execute(&self, _ctx: &mut TaskContext) -> Result<(), TaskError> {
-            Err(TaskError::ExecutionFailed("intentional failure".to_string()))
+            Err(TaskError::ExecutionFailed(
+                "intentional failure".to_string(),
+            ))
         }
 
         fn retry_policy(&self) -> RetryPolicy {

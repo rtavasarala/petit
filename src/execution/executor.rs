@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Semaphore;
 use tokio::time::sleep;
-use tracing::{debug, info_span, warn, Instrument};
+use tracing::{Instrument, debug, info_span, warn};
 
 use crate::core::context::TaskContext;
 use crate::core::retry::RetryCondition;
@@ -135,7 +135,11 @@ impl TaskExecutor {
     /// Execute a task without acquiring a semaphore permit.
     ///
     /// Use this when you're managing concurrency externally or for testing.
-    pub async fn execute_without_permit(&self, task: &dyn Task, ctx: &mut TaskContext) -> TaskResult {
+    pub async fn execute_without_permit(
+        &self,
+        task: &dyn Task,
+        ctx: &mut TaskContext,
+    ) -> TaskResult {
         let task_name = task.name();
         debug!(task = %task_name, "starting execution (no permit required)");
 
@@ -489,7 +493,12 @@ mod tests {
         assert!(result.success);
         assert_eq!(result.attempts, 2);
         // Should have waited at least the delay duration
-        assert!(elapsed >= delay, "Expected at least {:?}, got {:?}", delay, elapsed);
+        assert!(
+            elapsed >= delay,
+            "Expected at least {:?}, got {:?}",
+            delay,
+            elapsed
+        );
     }
 
     #[tokio::test]
@@ -583,8 +592,7 @@ mod tests {
         let executor = TaskExecutor::new(4);
         let task = CountingTask::new(
             "no_retry_task",
-            RetryPolicy::fixed(5, Duration::from_millis(1))
-                .with_condition(RetryCondition::Never),
+            RetryPolicy::fixed(5, Duration::from_millis(1)).with_condition(RetryCondition::Never),
         );
         let mut ctx = create_test_context();
 

@@ -7,7 +7,7 @@
 
 use clap::{Parser, Subcommand};
 use pt::{
-    load_jobs_from_directory, DagExecutor, EventBus, EventHandler, InMemoryStorage, Scheduler,
+    DagExecutor, EventBus, EventHandler, InMemoryStorage, Scheduler, load_jobs_from_directory,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -364,10 +364,7 @@ impl EventHandler for CompletionWatcher {
 }
 
 /// Trigger a specific job and wait for it to complete.
-async fn trigger_job(
-    jobs_dir: PathBuf,
-    job_id: String,
-) -> Result<(), Box<dyn std::error::Error>> {
+async fn trigger_job(jobs_dir: PathBuf, job_id: String) -> Result<(), Box<dyn std::error::Error>> {
     info!("Loading jobs from: {}", jobs_dir.display());
 
     let jobs = load_jobs_from_directory(&jobs_dir)?;

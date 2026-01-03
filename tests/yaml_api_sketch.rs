@@ -3,11 +3,11 @@
 //! This test demonstrates the actual user experience using petit's
 //! YAML configuration and execution infrastructure.
 
+use async_trait::async_trait;
 use petit::{
     CommandTask, DagBuilder, DagExecutor, Environment, Job, JobBuilder, Schedule, Task,
     TaskCondition, TaskContext, TaskError, TaskExecutor, TaskId, YamlLoader,
 };
-use async_trait::async_trait;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
@@ -200,10 +200,7 @@ fn test_environment_merging() {
 
     assert_eq!(merged.get("LOG_LEVEL"), Some("debug")); // Task override
     assert_eq!(merged.get("DATA_DIR"), Some("/data")); // From job
-    assert_eq!(
-        merged.get("DATABASE_URL"),
-        Some("postgres://localhost/db")
-    ); // From task
+    assert_eq!(merged.get("DATABASE_URL"), Some("postgres://localhost/db")); // From task
 }
 
 #[test]
@@ -533,7 +530,10 @@ fn test_job_builder_api() {
     // Demonstrate the Job builder API for programmatic job creation
     let dag = DagBuilder::new("my_dag", "My DAG")
         .add_task(Arc::new(
-            CommandTask::builder("echo").name("task1").arg("test").build(),
+            CommandTask::builder("echo")
+                .name("task1")
+                .arg("test")
+                .build(),
         ))
         .build()
         .unwrap();

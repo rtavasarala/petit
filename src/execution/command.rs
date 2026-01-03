@@ -304,17 +304,14 @@ impl Task for CommandTask {
 
         // Execute with optional timeout
         let output = match self.timeout {
-            Some(duration) => {
-                timeout(duration, cmd.output())
-                    .await
-                    .map_err(|_| TaskError::Timeout(duration))?
-                    .map_err(|e| TaskError::ExecutionFailed(e.to_string()))?
-            }
-            None => {
-                cmd.output()
-                    .await
-                    .map_err(|e| TaskError::ExecutionFailed(e.to_string()))?
-            }
+            Some(duration) => timeout(duration, cmd.output())
+                .await
+                .map_err(|_| TaskError::Timeout(duration))?
+                .map_err(|e| TaskError::ExecutionFailed(e.to_string()))?,
+            None => cmd
+                .output()
+                .await
+                .map_err(|e| TaskError::ExecutionFailed(e.to_string()))?,
         };
 
         // Store stdout and stderr in context (always write, even if empty,
@@ -545,10 +542,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_command_returns_exit_code_on_failure() {
-        let task = CommandTask::builder("sh")
-            .arg("-c")
-            .arg("exit 42")
-            .build();
+        let task = CommandTask::builder("sh").arg("-c").arg("exit 42").build();
 
         let mut ctx = create_test_context();
         let result = task.execute(&mut ctx).await;
@@ -564,9 +558,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_command_stores_exit_code_on_success() {
-        let task = CommandTask::builder("true")
-            .name("test")
-            .build();
+        let task = CommandTask::builder("true").name("test").build();
 
         let mut ctx = create_test_context();
         let result = task.execute(&mut ctx).await;
@@ -638,9 +630,7 @@ mod tests {
     #[tokio::test]
     async fn test_command_writes_empty_stdout_stderr_to_context() {
         // Command that produces no output
-        let task = CommandTask::builder("true")
-            .name("test")
-            .build();
+        let task = CommandTask::builder("true").name("test").build();
 
         let mut ctx = create_test_context();
         let result = task.execute(&mut ctx).await;
@@ -680,8 +670,8 @@ mod tests {
 
     #[test]
     fn test_command_with_retry_policy() {
-        let policy = RetryPolicy::fixed(3, Duration::from_secs(5))
-            .with_condition(RetryCondition::Always);
+        let policy =
+            RetryPolicy::fixed(3, Duration::from_secs(5)).with_condition(RetryCondition::Always);
 
         let task = CommandTask::builder("echo")
             .retry_policy(policy.clone())
