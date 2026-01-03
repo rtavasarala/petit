@@ -747,7 +747,7 @@ mod tests {
         let events = handler.events().await;
         assert_eq!(events.len(), 2); // Two retry events (after attempt 1 and 2)
 
-        // Check first retry event
+        // Check first retry event (after initial attempt failed)
         match &events[0] {
             Event::TaskRetrying {
                 task_id,
@@ -758,13 +758,14 @@ mod tests {
             } => {
                 assert_eq!(task_id.as_str(), "retrying_task");
                 assert_eq!(event_dag_id.as_str(), "test_dag");
-                assert_eq!(*attempt, 1);
-                assert_eq!(*max_attempts, 4); // max_attempts includes initial attempt
+                assert_eq!(*attempt, 1); // First attempt (initial) just failed
+                // max_attempts = RetryPolicy.max_attempts (3) + 1 initial = 4 total
+                assert_eq!(*max_attempts, 4);
             }
             _ => panic!("Expected TaskRetrying event"),
         }
 
-        // Check second retry event
+        // Check second retry event (after first retry failed)
         match &events[1] {
             Event::TaskRetrying {
                 task_id,
@@ -773,7 +774,7 @@ mod tests {
                 ..
             } => {
                 assert_eq!(task_id.as_str(), "retrying_task");
-                assert_eq!(*attempt, 2);
+                assert_eq!(*attempt, 2); // Second attempt (first retry) just failed
                 assert_eq!(*max_attempts, 4);
             }
             _ => panic!("Expected TaskRetrying event"),
