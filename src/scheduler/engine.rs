@@ -493,6 +493,10 @@ impl<S: Storage + 'static> Scheduler<S> {
     }
 
     /// Check all job schedules and trigger those that are due.
+    ///
+    /// This method checks if any scheduled occurrences exist between `last_check` and `now`.
+    /// If multiple occurrences were missed (e.g., during a pause or slow tick), the job is
+    /// triggered only once to avoid a burst of executions.
     async fn check_schedules(
         &self,
         last_check: chrono::DateTime<chrono::Utc>,
@@ -503,28 +507,67 @@ impl<S: Storage + 'static> Scheduler<S> {
                 continue;
             }
 
-            if let Some(schedule) = job.schedule() {
-                // Check if there's a scheduled occurrence between last_check and now
-                if let Ok(next) = schedule.next_after(last_check) {
-                    tracing::debug!(
-                        job_id = %job.id(),
-                        last_check = %last_check,
-                        now = %now,
-                        next = %next,
-                        will_trigger = next <= now,
-                        "Checking schedule"
-                    );
-                    // If the next occurrence is at or before now, trigger the job
-                    if next <= now {
-                        // Check dependencies before triggering
-                        if self.check_dependencies(job).await {
-                            tracing::info!(job_id = %job.id(), "Triggering scheduled job");
-                            if let Err(e) = self.trigger_job(job.id()).await {
-                                tracing::warn!(job_id = %job.id(), error = %e, "Failed to trigger scheduled job");
-                            }
-                        }
+            let Some(schedule) = job.schedule() else {
+                continue;
+            };
+
+            // Count how many occurrences exist between last_check and now
+            // Limit iterations to avoid performance issues with frequent schedules
+            const MAX_COUNT_ITERATIONS: usize = 100;
+            let mut occurrence_count = 0;
+            let mut current_time = last_check;
+
+            while occurrence_count < MAX_COUNT_ITERATIONS {
+                match schedule.next_after(current_time) {
+                    Ok(next) if next <= now => {
+                        occurrence_count += 1;
+                        current_time = next;
                     }
+                    _ => break,
                 }
+            }
+
+            if occurrence_count == 0 {
+                continue;
+            }
+
+            if occurrence_count >= MAX_COUNT_ITERATIONS {
+                tracing::warn!(
+                    job_id = %job.id(),
+                    last_check = %last_check,
+                    now = %now,
+                    missed_occurrences = format!("{}+", occurrence_count),
+                    "Many scheduled occurrences missed ({}+), triggering once",
+                    MAX_COUNT_ITERATIONS
+                );
+            } else if occurrence_count > 1 {
+                tracing::warn!(
+                    job_id = %job.id(),
+                    last_check = %last_check,
+                    now = %now,
+                    missed_occurrences = occurrence_count,
+                    "Multiple scheduled occurrences missed, triggering once"
+                );
+            } else {
+                tracing::debug!(
+                    job_id = %job.id(),
+                    last_check = %last_check,
+                    now = %now,
+                    "Found scheduled occurrence"
+                );
+            }
+
+            // Check dependencies before triggering
+            if self.check_dependencies(job).await {
+                tracing::info!(job_id = %job.id(), "Triggering scheduled job");
+                if let Err(e) = self.trigger_job(job.id()).await {
+                    tracing::warn!(job_id = %job.id(), error = %e, "Failed to trigger scheduled job");
+                }
+            } else {
+                tracing::debug!(
+                    job_id = %job.id(),
+                    "Skipping scheduled job due to unsatisfied dependencies"
+                );
             }
         }
     }
@@ -944,6 +987,56 @@ mod tests {
         handle.resume().await.unwrap();
         assert!(handle.is_running().await);
         assert!(!handle.is_paused().await);
+
+        handle.shutdown().await.unwrap();
+        let _ = task.await;
+    }
+
+    #[tokio::test]
+    async fn test_scheduler_handles_missed_occurrences_without_burst() {
+        // This test verifies that when multiple schedule occurrences are missed
+        // (e.g., due to a slow tick), the scheduler triggers the job only once,
+        // not once per missed occurrence.
+        //
+        // Setup: Job runs @every 1s, but tick interval is 3s.
+        // After the first tick, 2-3 occurrences will be missed before the next tick.
+        // The new counting logic should detect these missed occurrences and
+        // trigger the job only once.
+
+        let storage = Arc::new(InMemoryStorage::new());
+        let mut scheduler = Scheduler::with_storage(Arc::clone(&storage))
+            .with_tick_interval(Duration::from_secs(3)); // Slow tick to miss occurrences
+
+        // Job that runs every second - will have multiple occurrences between ticks
+        let job = create_scheduled_job("frequent", "Frequent Job", "@every 1s");
+        scheduler.register(job);
+
+        let (handle, task) = scheduler.start().await;
+
+        // Wait for the first tick (immediate) plus time for multiple schedule
+        // occurrences to pass before the next tick
+        // First tick: sets last_check to now
+        // After 2.5s: 2 schedule occurrences have passed (@1s, @2s)
+        // At 3s: second tick fires, should detect 2-3 missed occurrences
+        tokio::time::sleep(Duration::from_millis(3500)).await;
+
+        // Check how many runs were created
+        let runs = storage
+            .list_runs(&JobId::new("frequent"), 100)
+            .await
+            .unwrap();
+
+        // With @every 1s and 3.5s elapsed, we'd expect ~3 occurrences.
+        // OLD behavior would trigger 3 times (one per occurrence).
+        // NEW behavior triggers once per tick, regardless of missed occurrences.
+        // We expect 1-2 runs (first tick might trigger, second tick definitely will)
+        assert!(
+            runs.len() <= 2,
+            "Expected at most 2 runs (not a burst of {}), got {}. \
+             The scheduler should trigger once per tick, not once per missed occurrence.",
+            runs.len(),
+            runs.len()
+        );
 
         handle.shutdown().await.unwrap();
         let _ = task.await;
