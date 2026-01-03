@@ -27,7 +27,6 @@ use crate::execution::{DagExecutor, DagResult};
 /// Provides the ability to:
 /// - Pre-set input values that tasks can read
 /// - Capture outputs written by tasks
-/// - Track which keys were accessed
 ///
 /// # Example
 ///
@@ -50,8 +49,6 @@ pub struct MockTaskContext {
     task_id: TaskId,
     store: Arc<RwLock<HashMap<String, Value>>>,
     config: Arc<HashMap<String, Value>>,
-    accessed_keys: Arc<RwLock<Vec<String>>>,
-    written_keys: Arc<RwLock<Vec<String>>>,
 }
 
 impl MockTaskContext {
@@ -61,8 +58,6 @@ impl MockTaskContext {
             task_id: TaskId::new(task_id),
             store: Arc::new(RwLock::new(HashMap::new())),
             config: Arc::new(HashMap::new()),
-            accessed_keys: Arc::new(RwLock::new(Vec::new())),
-            written_keys: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
@@ -72,8 +67,6 @@ impl MockTaskContext {
             task_id: TaskId::new(task_id),
             store: Arc::new(RwLock::new(HashMap::new())),
             config: Arc::new(config),
-            accessed_keys: Arc::new(RwLock::new(Vec::new())),
-            written_keys: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
@@ -108,32 +101,13 @@ impl MockTaskContext {
             .unwrap_or(false)
     }
 
-    /// Get all keys that were written by the task.
-    pub fn written_keys(&self) -> Vec<String> {
-        self.written_keys
-            .read()
-            .unwrap_or_else(|_| panic!())
-            .clone()
-    }
-
-    /// Get all keys that were read by the task.
-    pub fn accessed_keys(&self) -> Vec<String> {
-        self.accessed_keys
-            .read()
-            .unwrap_or_else(|_| panic!())
-            .clone()
-    }
-
     /// Get the underlying store as a HashMap.
     pub fn store(&self) -> HashMap<String, Value> {
         self.store.read().map(|s| s.clone()).unwrap_or_default()
     }
 
     /// Convert to a TaskContext for use in task execution.
-    ///
-    /// Note: The returned context tracks reads and writes.
     pub fn as_context(&self) -> TaskContext {
-        // We create a tracking store that records access
         TaskContext::new(
             self.store.clone(),
             self.task_id.clone(),
