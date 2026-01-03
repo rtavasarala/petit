@@ -260,5 +260,7 @@ async fn test_invalid_run_id_returns_error() {
     let response = router.oneshot(request).await.unwrap();
 
     // Should return 404 (or could be 400 for bad request)
-    assert!(response.status() == StatusCode::NOT_FOUND || response.status() == StatusCode::BAD_REQUEST);
+    assert!(
+        response.status() == StatusCode::NOT_FOUND || response.status() == StatusCode::BAD_REQUEST
+    );
 }

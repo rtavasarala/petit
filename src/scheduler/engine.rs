@@ -340,8 +340,7 @@ impl<S: Storage + 'static> Scheduler<S> {
     /// that exist in storage but are no longer registered with the scheduler.
     async fn sync_jobs_to_storage(&self) {
         // Collect current job IDs
-        let current_job_ids: std::collections::HashSet<_> =
-            self.jobs.keys().cloned().collect();
+        let current_job_ids: std::collections::HashSet<_> = self.jobs.keys().cloned().collect();
 
         // Upsert all current jobs
         for job in self.jobs.values() {
