@@ -316,6 +316,16 @@ impl YamlLoader {
             ));
         }
 
+        // Validate schedule if present
+        if let Some(schedule) = &config.schedule {
+            let cron_expr = schedule.cron();
+            let tz = schedule.timezone().unwrap_or("UTC");
+
+            // Validate by attempting to parse the schedule
+            crate::core::schedule::Schedule::with_timezone(cron_expr, tz)
+                .map_err(|e| ConfigError::InvalidConfig(format!("invalid schedule: {}", e)))?;
+        }
+
         // Check for duplicate task IDs
         let mut task_ids: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for task in &config.tasks {
@@ -797,5 +807,124 @@ tasks:
             }
             _ => panic!("Expected Custom task type"),
         }
+    }
+
+    #[test]
+    fn test_validation_error_invalid_cron_expression() {
+        let yaml = r#"
+id: invalid_cron_job
+name: Invalid Cron Job
+schedule: "foo bar baz"
+tasks:
+  - id: task1
+    type: command
+    command: echo
+"#;
+        let result = YamlLoader::parse_job_config(yaml);
+        assert!(matches!(result, Err(ConfigError::InvalidConfig(_))));
+        if let Err(ConfigError::InvalidConfig(msg)) = result {
+            assert!(msg.contains("invalid schedule"));
+        }
+    }
+
+    #[test]
+    fn test_validation_error_invalid_timezone() {
+        let yaml = r#"
+id: invalid_tz_job
+name: Invalid Timezone Job
+schedule:
+  cron: "0 9 * * *"
+  timezone: "Invalid/Timezone"
+tasks:
+  - id: task1
+    type: command
+    command: echo
+"#;
+        let result = YamlLoader::parse_job_config(yaml);
+        assert!(matches!(result, Err(ConfigError::InvalidConfig(_))));
+        if let Err(ConfigError::InvalidConfig(msg)) = result {
+            assert!(msg.contains("invalid schedule"));
+            assert!(msg.contains("timezone"));
+        }
+    }
+
+    #[test]
+    fn test_validation_error_invalid_shortcut() {
+        let yaml = r#"
+id: invalid_shortcut_job
+name: Invalid Shortcut Job
+schedule: "@invalid"
+tasks:
+  - id: task1
+    type: command
+    command: echo
+"#;
+        let result = YamlLoader::parse_job_config(yaml);
+        assert!(matches!(result, Err(ConfigError::InvalidConfig(_))));
+        if let Err(ConfigError::InvalidConfig(msg)) = result {
+            assert!(msg.contains("invalid schedule"));
+        }
+    }
+
+    #[test]
+    fn test_validation_success_valid_cron() {
+        let yaml = r#"
+id: valid_cron_job
+name: Valid Cron Job
+schedule: "0 9 * * *"
+tasks:
+  - id: task1
+    type: command
+    command: echo
+"#;
+        let result = YamlLoader::parse_job_config(yaml);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validation_success_valid_cron_with_timezone() {
+        let yaml = r#"
+id: valid_cron_tz_job
+name: Valid Cron with Timezone Job
+schedule:
+  cron: "0 9 * * *"
+  timezone: "America/New_York"
+tasks:
+  - id: task1
+    type: command
+    command: echo
+"#;
+        let result = YamlLoader::parse_job_config(yaml);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validation_success_valid_shortcut() {
+        let yaml = r#"
+id: valid_shortcut_job
+name: Valid Shortcut Job
+schedule: "@daily"
+tasks:
+  - id: task1
+    type: command
+    command: echo
+"#;
+        let result = YamlLoader::parse_job_config(yaml);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validation_success_valid_interval() {
+        let yaml = r#"
+id: valid_interval_job
+name: Valid Interval Job
+schedule: "@every 5m"
+tasks:
+  - id: task1
+    type: command
+    command: echo
+"#;
+        let result = YamlLoader::parse_job_config(yaml);
+        assert!(result.is_ok());
     }
 }
