@@ -329,7 +329,7 @@ impl Task for CommandTask {
         // Store exit code in context (always, so downstream tasks can check it)
         let code = output.status.code().unwrap_or(-1);
         ctx.outputs
-            .set("exit_code", &code)
+            .set("exit_code", code)
             .map_err(|e| TaskError::ExecutionFailed(e.to_string()))?;
 
         // Check exit status

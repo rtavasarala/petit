@@ -737,8 +737,8 @@ mod tests {
         // B and C should start around the same time (orders 1 and 2)
         let b_order = task_b.get_order();
         let c_order = task_c.get_order();
-        assert!(b_order >= 1 && b_order <= 2);
-        assert!(c_order >= 1 && c_order <= 2);
+        assert!((1..=2).contains(&b_order));
+        assert!((1..=2).contains(&c_order));
 
         // Total time should be ~60ms (10 for A + 50 for B||C), not ~110ms
         assert!(

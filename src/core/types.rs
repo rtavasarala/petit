@@ -81,6 +81,11 @@ impl RunId {
         Self(uuid)
     }
 
+    /// Parse a RunId from a string representation.
+    pub fn from_string(s: &str) -> Result<Self, uuid::Error> {
+        Ok(Self(Uuid::parse_str(s)?))
+    }
+
     /// Get the underlying UUID.
     pub fn as_uuid(&self) -> &Uuid {
         &self.0

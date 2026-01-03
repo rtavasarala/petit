@@ -6,9 +6,16 @@
 //!   pt list <jobs-dir>    List all jobs in the directory
 
 use clap::{Parser, Subcommand};
-use pt::{
-    DagExecutor, EventBus, EventHandler, InMemoryStorage, Scheduler, load_jobs_from_directory,
+use petit::{
+    DagExecutor, EventBus, EventHandler, InMemoryStorage, Scheduler, Storage,
+    load_jobs_from_directory,
 };
+
+#[cfg(feature = "api")]
+use petit::{ApiConfig, create_api_state, start_server};
+
+#[cfg(feature = "sqlite")]
+use petit::SqliteStorage;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -42,6 +49,26 @@ enum Commands {
         /// Scheduler tick interval in seconds (default: 1)
         #[arg(long, default_value = "1")]
         tick_interval: u64,
+
+        /// Path to SQLite database file for persistent storage (requires sqlite feature)
+        #[cfg(feature = "sqlite")]
+        #[arg(long, env = "PETIT_DB")]
+        db: Option<PathBuf>,
+
+        /// Disable the HTTP API server
+        #[cfg(feature = "api")]
+        #[arg(long)]
+        no_api: bool,
+
+        /// API server port (default: 8565)
+        #[cfg(feature = "api")]
+        #[arg(long, default_value = "8565")]
+        api_port: u16,
+
+        /// API server host (default: 127.0.0.1)
+        #[cfg(feature = "api")]
+        #[arg(long, default_value = "127.0.0.1")]
+        api_host: String,
     },
 
     /// Validate job configurations without running
@@ -67,6 +94,11 @@ enum Commands {
         /// Job ID to trigger
         #[arg(value_name = "JOB_ID")]
         job_id: String,
+
+        /// Path to SQLite database file for persistent storage (requires sqlite feature)
+        #[cfg(feature = "sqlite")]
+        #[arg(long, env = "PETIT_DB")]
+        db: Option<PathBuf>,
     },
 }
 
@@ -75,12 +107,12 @@ struct LoggingHandler;
 
 #[async_trait::async_trait]
 impl EventHandler for LoggingHandler {
-    async fn handle(&self, event: &pt::Event) {
+    async fn handle(&self, event: &petit::Event) {
         match event {
-            pt::Event::JobStarted { job_id, run_id, .. } => {
+            petit::Event::JobStarted { job_id, run_id, .. } => {
                 info!("Job '{}' started (run: {})", job_id, run_id);
             }
-            pt::Event::JobCompleted {
+            petit::Event::JobCompleted {
                 job_id,
                 run_id,
                 success,
@@ -99,10 +131,10 @@ impl EventHandler for LoggingHandler {
                     );
                 }
             }
-            pt::Event::TaskStarted { task_id, .. } => {
+            petit::Event::TaskStarted { task_id, .. } => {
                 info!("  Task '{}' started", task_id);
             }
-            pt::Event::TaskCompleted {
+            petit::Event::TaskCompleted {
                 task_id,
                 stdout,
                 stderr,
@@ -130,7 +162,7 @@ impl EventHandler for LoggingHandler {
                     }
                 }
             }
-            pt::Event::TaskFailed {
+            petit::Event::TaskFailed {
                 task_id,
                 error,
                 stdout,
@@ -177,13 +209,75 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match cli.command {
+        #[cfg(all(feature = "sqlite", feature = "api"))]
+        Commands::Run {
+            jobs_dir,
+            max_jobs,
+            max_tasks,
+            tick_interval,
+            db,
+            no_api,
+            api_port,
+            api_host,
+        } => {
+            let api_config = if no_api {
+                None
+            } else {
+                Some(ApiConfig::new(api_host, api_port))
+            };
+            run_scheduler(jobs_dir, max_jobs, max_tasks, tick_interval, db, api_config).await?;
+        }
+        #[cfg(all(feature = "sqlite", not(feature = "api")))]
+        Commands::Run {
+            jobs_dir,
+            max_jobs,
+            max_tasks,
+            tick_interval,
+            db,
+        } => {
+            run_scheduler(jobs_dir, max_jobs, max_tasks, tick_interval, db, ()).await?;
+        }
+        #[cfg(all(not(feature = "sqlite"), feature = "api"))]
+        Commands::Run {
+            jobs_dir,
+            max_jobs,
+            max_tasks,
+            tick_interval,
+            no_api,
+            api_port,
+            api_host,
+        } => {
+            let api_config = if no_api {
+                None
+            } else {
+                Some(ApiConfig::new(api_host, api_port))
+            };
+            run_scheduler(
+                jobs_dir,
+                max_jobs,
+                max_tasks,
+                tick_interval,
+                None::<PathBuf>,
+                api_config,
+            )
+            .await?;
+        }
+        #[cfg(all(not(feature = "sqlite"), not(feature = "api")))]
         Commands::Run {
             jobs_dir,
             max_jobs,
             max_tasks,
             tick_interval,
         } => {
-            run_scheduler(jobs_dir, max_jobs, max_tasks, tick_interval).await?;
+            run_scheduler(
+                jobs_dir,
+                max_jobs,
+                max_tasks,
+                tick_interval,
+                None::<PathBuf>,
+                (),
+            )
+            .await?;
         }
         Commands::Validate { jobs_dir } => {
             validate_jobs(jobs_dir)?;
@@ -191,8 +285,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::List { jobs_dir } => {
             list_jobs(jobs_dir)?;
         }
+        #[cfg(feature = "sqlite")]
+        Commands::Trigger {
+            jobs_dir,
+            job_id,
+            db,
+        } => {
+            trigger_job(jobs_dir, job_id, db).await?;
+        }
+        #[cfg(not(feature = "sqlite"))]
         Commands::Trigger { jobs_dir, job_id } => {
-            trigger_job(jobs_dir, job_id).await?;
+            trigger_job(jobs_dir, job_id, None::<PathBuf>).await?;
         }
     }
 
@@ -200,11 +303,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Run the scheduler with jobs from a directory.
+#[cfg(feature = "api")]
 async fn run_scheduler(
     jobs_dir: PathBuf,
     max_jobs: Option<usize>,
     max_tasks: usize,
     tick_interval: u64,
+    db_path: Option<PathBuf>,
+    api_config: Option<ApiConfig>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     info!("Loading jobs from: {}", jobs_dir.display());
 
@@ -236,14 +342,219 @@ async fn run_scheduler(
     let event_bus = EventBus::new();
     event_bus.register(Arc::new(LoggingHandler)).await;
 
-    // Create storage
-    let storage = InMemoryStorage::new();
+    // Create DAG executor
+    let dag_executor = DagExecutor::with_concurrency(max_tasks);
+
+    // Create storage and scheduler based on db_path
+    #[cfg(feature = "sqlite")]
+    let scheduler_task = if let Some(db) = db_path {
+        info!("Using SQLite storage: {}", db.display());
+        let storage = Arc::new(SqliteStorage::new(&db).await?);
+        run_scheduler_with_storage(
+            storage,
+            jobs,
+            event_bus,
+            dag_executor,
+            tick_interval,
+            max_jobs,
+            api_config,
+        )
+        .await
+    } else {
+        info!("Using in-memory storage");
+        let storage = Arc::new(InMemoryStorage::new());
+        run_scheduler_with_storage(
+            storage,
+            jobs,
+            event_bus,
+            dag_executor,
+            tick_interval,
+            max_jobs,
+            api_config,
+        )
+        .await
+    };
+
+    #[cfg(not(feature = "sqlite"))]
+    let scheduler_task = {
+        let _ = db_path; // suppress unused warning
+        info!("Using in-memory storage");
+        let storage = Arc::new(InMemoryStorage::new());
+        run_scheduler_with_storage(
+            storage,
+            jobs,
+            event_bus,
+            dag_executor,
+            tick_interval,
+            max_jobs,
+            api_config,
+        )
+        .await
+    };
+
+    scheduler_task
+}
+
+/// Run the scheduler with jobs from a directory (no API).
+#[cfg(not(feature = "api"))]
+async fn run_scheduler(
+    jobs_dir: PathBuf,
+    max_jobs: Option<usize>,
+    max_tasks: usize,
+    tick_interval: u64,
+    db_path: Option<PathBuf>,
+    _api_config: (),
+) -> Result<(), Box<dyn std::error::Error>> {
+    info!("Loading jobs from: {}", jobs_dir.display());
+
+    let jobs = load_jobs_from_directory(&jobs_dir)?;
+
+    if jobs.is_empty() {
+        warn!("No job files found in {}", jobs_dir.display());
+        return Ok(());
+    }
+
+    info!("Loaded {} job(s):", jobs.len());
+    for job in &jobs {
+        let schedule_info = if job.is_scheduled() {
+            "scheduled"
+        } else {
+            "manual only"
+        };
+        let enabled_info = if job.is_enabled() { "" } else { " (disabled)" };
+        info!(
+            "  - {} ({}){}: {} task(s)",
+            job.id(),
+            schedule_info,
+            enabled_info,
+            job.dag().len()
+        );
+    }
+
+    // Create event bus with logging handler
+    let event_bus = EventBus::new();
+    event_bus.register(Arc::new(LoggingHandler)).await;
 
     // Create DAG executor
     let dag_executor = DagExecutor::with_concurrency(max_tasks);
 
-    // Create scheduler
-    let mut scheduler = Scheduler::new(storage)
+    // Create storage and scheduler based on db_path
+    #[cfg(feature = "sqlite")]
+    let scheduler_task = if let Some(db) = db_path {
+        info!("Using SQLite storage: {}", db.display());
+        let storage = Arc::new(SqliteStorage::new(&db).await?);
+        run_scheduler_with_storage_no_api(
+            storage,
+            jobs,
+            event_bus,
+            dag_executor,
+            tick_interval,
+            max_jobs,
+        )
+        .await
+    } else {
+        info!("Using in-memory storage");
+        let storage = Arc::new(InMemoryStorage::new());
+        run_scheduler_with_storage_no_api(
+            storage,
+            jobs,
+            event_bus,
+            dag_executor,
+            tick_interval,
+            max_jobs,
+        )
+        .await
+    };
+
+    #[cfg(not(feature = "sqlite"))]
+    let scheduler_task = {
+        let _ = db_path; // suppress unused warning
+        info!("Using in-memory storage");
+        let storage = Arc::new(InMemoryStorage::new());
+        run_scheduler_with_storage_no_api(
+            storage,
+            jobs,
+            event_bus,
+            dag_executor,
+            tick_interval,
+            max_jobs,
+        )
+        .await
+    };
+
+    scheduler_task
+}
+
+/// Helper to run scheduler with any storage type (with API support).
+#[cfg(feature = "api")]
+async fn run_scheduler_with_storage<S: Storage + 'static>(
+    storage: Arc<S>,
+    jobs: Vec<petit::Job>,
+    event_bus: EventBus,
+    dag_executor: DagExecutor,
+    tick_interval: u64,
+    max_jobs: Option<usize>,
+    api_config: Option<ApiConfig>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Create scheduler with shared storage
+    let mut scheduler = Scheduler::with_storage(Arc::clone(&storage))
+        .with_event_bus(event_bus)
+        .with_dag_executor(dag_executor)
+        .with_tick_interval(Duration::from_secs(tick_interval));
+
+    if let Some(max) = max_jobs {
+        scheduler = scheduler.with_max_concurrent_jobs(max);
+    }
+
+    // Clone jobs for API state before registering (registration consumes them)
+    let jobs_for_api = jobs.clone();
+
+    // Register all jobs
+    for job in jobs {
+        scheduler.register(job);
+    }
+
+    // Start the scheduler
+    info!("Starting scheduler (tick interval: {}s)...", tick_interval);
+    info!("Press Ctrl+C to stop");
+
+    let (handle, scheduler_task) = scheduler.start().await;
+
+    // Start API server if configured
+    let _api_handle = if let Some(config) = api_config {
+        let api_state = create_api_state(handle.clone(), storage, jobs_for_api);
+        Some(start_server(config, api_state).await?)
+    } else {
+        None
+    };
+
+    // Wait for Ctrl+C
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            info!("\nShutting down...");
+            handle.shutdown().await?;
+        }
+        _ = scheduler_task => {
+            info!("Scheduler stopped");
+        }
+    }
+
+    info!("Goodbye!");
+    Ok(())
+}
+
+/// Helper to run scheduler with any storage type (no API).
+#[cfg(not(feature = "api"))]
+async fn run_scheduler_with_storage_no_api<S: Storage + 'static>(
+    storage: Arc<S>,
+    jobs: Vec<petit::Job>,
+    event_bus: EventBus,
+    dag_executor: DagExecutor,
+    tick_interval: u64,
+    max_jobs: Option<usize>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Create scheduler with shared storage
+    let mut scheduler = Scheduler::with_storage(storage)
         .with_event_bus(event_bus)
         .with_dag_executor(dag_executor)
         .with_tick_interval(Duration::from_secs(tick_interval));
@@ -354,17 +665,21 @@ struct CompletionWatcher {
 
 #[async_trait::async_trait]
 impl EventHandler for CompletionWatcher {
-    async fn handle(&self, event: &pt::Event) {
-        if let pt::Event::JobCompleted { job_id, .. } = event {
-            if job_id.as_str() == self.target_job_id {
-                self.completed.notify_one();
-            }
+    async fn handle(&self, event: &petit::Event) {
+        if let petit::Event::JobCompleted { job_id, .. } = event
+            && job_id.as_str() == self.target_job_id
+        {
+            self.completed.notify_one();
         }
     }
 }
 
 /// Trigger a specific job and wait for it to complete.
-async fn trigger_job(jobs_dir: PathBuf, job_id: String) -> Result<(), Box<dyn std::error::Error>> {
+async fn trigger_job(
+    jobs_dir: PathBuf,
+    job_id: String,
+    db_path: Option<PathBuf>,
+) -> Result<(), Box<dyn std::error::Error>> {
     info!("Loading jobs from: {}", jobs_dir.display());
 
     let jobs = load_jobs_from_directory(&jobs_dir)?;
@@ -394,8 +709,30 @@ async fn trigger_job(jobs_dir: PathBuf, job_id: String) -> Result<(), Box<dyn st
     };
     event_bus.register(Arc::new(watcher)).await;
 
-    // Create storage and scheduler
+    // Create storage and scheduler based on db_path
+    #[cfg(feature = "sqlite")]
+    if let Some(db) = db_path {
+        info!("Using SQLite storage: {}", db.display());
+        let storage = SqliteStorage::new(&db).await?;
+        return trigger_job_with_storage(storage, jobs, event_bus, job_id, completed).await;
+    }
+
+    #[cfg(not(feature = "sqlite"))]
+    let _ = db_path; // suppress unused warning
+
+    info!("Using in-memory storage");
     let storage = InMemoryStorage::new();
+    trigger_job_with_storage(storage, jobs, event_bus, job_id, completed).await
+}
+
+/// Helper to trigger a job with any storage type.
+async fn trigger_job_with_storage<S: Storage + 'static>(
+    storage: S,
+    jobs: Vec<petit::Job>,
+    event_bus: EventBus,
+    job_id: String,
+    completed: Arc<tokio::sync::Notify>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let mut scheduler = Scheduler::new(storage).with_event_bus(event_bus);
 
     // Register all jobs (needed for dependency resolution)

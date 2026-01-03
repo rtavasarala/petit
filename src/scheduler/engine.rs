@@ -18,9 +18,60 @@ use tokio::task::JoinHandle;
 use crate::core::context::TaskContext;
 use crate::core::job::{DependencyCondition, Job};
 use crate::core::types::{JobId, RunId, TaskId};
-use crate::events::{Event, EventBus};
+use crate::events::{Event, EventBus, EventHandler};
 use crate::execution::DagExecutor;
-use crate::storage::{RunStatus, Storage, StorageError, StoredRun, StoredTaskState};
+use crate::storage::{RunStatus, Storage, StorageError, StoredJob, StoredRun, StoredTaskState};
+
+/// Event handler that updates task states in storage as tasks execute.
+struct TaskStateUpdater<S: Storage> {
+    storage: Arc<S>,
+    run_id: RunId,
+}
+
+#[async_trait::async_trait]
+impl<S: Storage + 'static> EventHandler for TaskStateUpdater<S> {
+    async fn handle(&self, event: &Event) {
+        match event {
+            Event::TaskStarted { task_id, .. } => {
+                if let Ok(mut state) = self.storage.get_task_state(&self.run_id, task_id).await {
+                    state.mark_running();
+                    if let Err(e) = self.storage.update_task_state(state).await {
+                        tracing::warn!(task_id = %task_id, run_id = %self.run_id, error = %e, "Failed to update task state to running");
+                    }
+                }
+            }
+            Event::TaskCompleted { task_id, .. } => {
+                if let Ok(mut state) = self.storage.get_task_state(&self.run_id, task_id).await {
+                    state.mark_completed();
+                    if let Err(e) = self.storage.update_task_state(state).await {
+                        tracing::warn!(task_id = %task_id, run_id = %self.run_id, error = %e, "Failed to update task state to completed");
+                    }
+                }
+            }
+            Event::TaskFailed { task_id, error, .. } => {
+                if let Ok(mut state) = self.storage.get_task_state(&self.run_id, task_id).await {
+                    state.mark_failed(error);
+                    if let Err(e) = self.storage.update_task_state(state).await {
+                        tracing::warn!(task_id = %task_id, run_id = %self.run_id, error = %e, "Failed to update task state to failed");
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Event handler that forwards events to another event bus.
+struct EventForwarder {
+    target: Arc<EventBus>,
+}
+
+#[async_trait::async_trait]
+impl EventHandler for EventForwarder {
+    async fn handle(&self, event: &Event) {
+        self.target.emit(event.clone()).await;
+    }
+}
 
 /// Errors that can occur in the scheduler.
 #[derive(Debug, Error)]
@@ -188,6 +239,7 @@ pub struct Scheduler<S: Storage> {
     /// Maximum concurrent jobs overall (None = unlimited).
     max_concurrent_jobs: Option<usize>,
     /// Currently running job handles mapped to (JobId, Handle).
+    #[allow(clippy::type_complexity)]
     running_jobs: Arc<RwLock<HashMap<RunId, (JobId, JoinHandle<()>)>>>,
 }
 
@@ -264,6 +316,9 @@ impl<S: Storage + 'static> Scheduler<S> {
 
     /// Start the scheduler and return a handle for controlling it.
     pub async fn start(self) -> (SchedulerHandle, JoinHandle<()>) {
+        // Sync job definitions to storage so TUI and other tools can see them
+        self.sync_jobs_to_storage().await;
+
         let (command_tx, command_rx) = mpsc::channel(32);
         let state = Arc::new(RwLock::new(SchedulerState::Running));
 
@@ -277,6 +332,46 @@ impl<S: Storage + 'static> Scheduler<S> {
         });
 
         (handle, scheduler_task)
+    }
+
+    /// Sync registered jobs to storage for visibility by TUI and other tools.
+    ///
+    /// This performs an upsert for all current jobs and removes any stale jobs
+    /// that exist in storage but are no longer registered with the scheduler.
+    async fn sync_jobs_to_storage(&self) {
+        // Collect current job IDs
+        let current_job_ids: std::collections::HashSet<_> = self.jobs.keys().cloned().collect();
+
+        // Upsert all current jobs
+        for job in self.jobs.values() {
+            let mut stored = StoredJob::new(job.id().clone(), job.name(), job.dag().id().clone())
+                .with_enabled(job.is_enabled());
+
+            if let Some(schedule) = job.schedule() {
+                stored = stored.with_schedule(schedule.expression());
+            }
+
+            if let Err(e) = self.storage.upsert_job(stored).await {
+                tracing::warn!(job_id = %job.id(), error = %e, "Failed to sync job to storage");
+            }
+        }
+
+        // Remove stale jobs from storage that are no longer registered
+        match self.storage.list_jobs().await {
+            Ok(stored_jobs) => {
+                for stored_job in stored_jobs {
+                    if !current_job_ids.contains(&stored_job.id) {
+                        tracing::info!(job_id = %stored_job.id, "Removing stale job from storage");
+                        if let Err(e) = self.storage.delete_job(&stored_job.id).await {
+                            tracing::warn!(job_id = %stored_job.id, error = %e, "Failed to delete stale job");
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to list jobs for stale cleanup");
+            }
+        }
     }
 
     /// Recover interrupted runs from storage.
@@ -329,6 +424,10 @@ impl<S: Storage + 'static> Scheduler<S> {
                         SchedulerCommand::Resume { response } => {
                             let mut s = state.write().await;
                             *s = SchedulerState::Running;
+                            // Reset last_check to now to skip schedules that fired during pause.
+                            // This prevents a burst of missed runs from being triggered on resume.
+                            last_check = chrono::Utc::now();
+                            tracing::info!("Scheduler resumed, skipping any schedules that fired during pause");
                             let _ = response.send(());
                         }
                         SchedulerCommand::Shutdown { response } => {
@@ -346,7 +445,7 @@ impl<S: Storage + 'static> Scheduler<S> {
     /// Check all job schedules and trigger those that are due.
     async fn check_schedules(
         &self,
-        _last_check: chrono::DateTime<chrono::Utc>,
+        last_check: chrono::DateTime<chrono::Utc>,
         now: chrono::DateTime<chrono::Utc>,
     ) {
         for job in self.jobs.values() {
@@ -355,15 +454,21 @@ impl<S: Storage + 'static> Scheduler<S> {
             }
 
             if let Some(schedule) = job.schedule() {
-                // Check if the job should run
-                if let Ok(next) = schedule.next_after(now - chrono::Duration::seconds(1)) {
-                    // If next occurrence is within the tick interval, trigger
-                    let diff = next - now;
-                    if diff.num_seconds() <= 0
-                        && diff.num_seconds() > -(self.tick_interval.as_secs() as i64)
-                    {
+                // Check if there's a scheduled occurrence between last_check and now
+                if let Ok(next) = schedule.next_after(last_check) {
+                    tracing::debug!(
+                        job_id = %job.id(),
+                        last_check = %last_check,
+                        now = %now,
+                        next = %next,
+                        will_trigger = next <= now,
+                        "Checking schedule"
+                    );
+                    // If the next occurrence is at or before now, trigger the job
+                    if next <= now {
                         // Check dependencies before triggering
                         if self.check_dependencies(job).await {
+                            tracing::info!(job_id = %job.id(), "Triggering scheduled job");
                             let _ = self.trigger_job(job.id()).await;
                         }
                     }
@@ -483,14 +588,28 @@ impl<S: Storage + 'static> Scheduler<S> {
                 let _ = storage.save_task_state(state).await;
             }
 
+            // Create a job-local event bus that:
+            // 1. Updates task states in storage (local handler, dropped after job completes)
+            // 2. Forwards events to the main event bus
+            let job_event_bus = Arc::new(EventBus::new());
+            let storage_handler = Arc::new(TaskStateUpdater {
+                storage: Arc::clone(&storage),
+                run_id: run_id_clone.clone(),
+            });
+            let forwarder = Arc::new(EventForwarder {
+                target: Arc::clone(&event_bus),
+            });
+            job_event_bus.register(storage_handler).await;
+            job_event_bus.register(forwarder).await;
+
             // Create context for execution
             let store = Arc::new(std::sync::RwLock::new(HashMap::new()));
             let config = Arc::new(job.config().clone());
             let mut ctx = TaskContext::new(store, TaskId::new("job"), config);
 
-            // Execute the DAG with event emission
+            // Execute the DAG with event emission (using job-local bus)
             let result = dag_executor
-                .execute_with_events(job.dag(), &mut ctx, Some(event_bus.clone()))
+                .execute_with_events(job.dag(), &mut ctx, Some(job_event_bus))
                 .await;
 
             // Update run status

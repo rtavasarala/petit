@@ -47,11 +47,12 @@ pub struct GlobalConfig {
 }
 
 /// Storage configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum StorageConfig {
     /// In-memory storage (default, non-persistent).
     #[serde(rename = "memory")]
+    #[default]
     Memory,
     /// SQLite storage.
     #[serde(rename = "sqlite")]
@@ -59,12 +60,6 @@ pub enum StorageConfig {
         /// Path to the database file.
         path: String,
     },
-}
-
-impl Default for StorageConfig {
-    fn default() -> Self {
-        Self::Memory
-    }
 }
 
 /// Job configuration from YAML.

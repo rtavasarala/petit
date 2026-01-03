@@ -1,5 +1,11 @@
 -- Initial schema for petit task orchestrator
 
+-- Enable WAL mode for better concurrent access (allows readers while writing)
+PRAGMA journal_mode = WAL;
+
+-- Set busy timeout to 5 seconds (wait instead of immediately failing on lock)
+PRAGMA busy_timeout = 5000;
+
 -- Jobs table
 CREATE TABLE IF NOT EXISTS jobs (
     id TEXT PRIMARY KEY NOT NULL,

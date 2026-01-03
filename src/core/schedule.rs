@@ -45,7 +45,7 @@ pub struct Schedule {
 #[derive(Debug, Clone, Default)]
 enum ScheduleType {
     /// Standard cron schedule.
-    Cron(CronSchedule),
+    Cron(Box<CronSchedule>),
     /// Interval-based schedule (e.g., @every 5m).
     Interval(std::time::Duration),
     /// Not yet parsed.
@@ -179,7 +179,7 @@ impl Schedule {
         let schedule = CronSchedule::from_str(&cron_expr)
             .map_err(|e| ScheduleError::InvalidCron(e.to_string()))?;
 
-        Ok(ScheduleType::Cron(schedule))
+        Ok(ScheduleType::Cron(Box::new(schedule)))
     }
 
     /// Get the next occurrence after the given time.
@@ -238,7 +238,7 @@ impl Schedule {
                 let mut results = Vec::with_capacity(n);
                 let mut current = after;
                 for _ in 0..n {
-                    current = current + chrono_duration;
+                    current += chrono_duration;
                     results.push(current);
                 }
                 Ok(results)
@@ -387,9 +387,9 @@ mod tests {
         assert_eq!(occurrences.len(), 5);
 
         // Each should be 1 hour apart
-        for i in 0..occurrences.len() {
+        for (i, occurrence) in occurrences.iter().enumerate() {
             let expected = base + chrono::Duration::hours((i + 1) as i64);
-            assert_eq!(occurrences[i], expected);
+            assert_eq!(*occurrence, expected);
         }
     }
 

@@ -71,7 +71,6 @@ use std::sync::{Arc, RwLock};
 ///     depends_on: [validate]
 ///     condition: on_failure
 /// ```
-
 // A simple mock task for testing DAG construction without running commands
 struct MockCommandTask {
     name: String,
@@ -83,7 +82,7 @@ struct MockCommandTask {
 }
 
 impl MockCommandTask {
-    fn new(name: &str, program: &str, args: Vec<&str>) -> Arc<dyn Task> {
+    fn create(name: &str, program: &str, args: Vec<&str>) -> Arc<dyn Task> {
         Arc::new(Self {
             name: name.to_string(),
             program: program.to_string(),
@@ -132,21 +131,21 @@ fn test_yaml_like_dag_construction() {
     // Users write YAML, we parse it into this structure
 
     let dag = DagBuilder::new("etl_pipeline", "ETL Pipeline")
-        .add_task(MockCommandTask::new(
+        .add_task(MockCommandTask::create(
             "extract",
             "python",
             vec!["scripts/extract.py", "--input", "/data/raw"],
         ))
         .add_task_with_deps(
-            MockCommandTask::new("transform", "python", vec!["scripts/transform.py"]),
+            MockCommandTask::create("transform", "python", vec!["scripts/transform.py"]),
             &["extract"],
         )
         .add_task_with_deps(
-            MockCommandTask::new("validate", "python", vec!["scripts/validate.py"]),
+            MockCommandTask::create("validate", "python", vec!["scripts/validate.py"]),
             &["transform"],
         )
         .add_task_with_deps(
-            MockCommandTask::new("notify", "bash", vec!["-c", "echo done"]),
+            MockCommandTask::create("notify", "bash", vec!["-c", "echo done"]),
             &["validate"],
         )
         .build()
@@ -208,9 +207,9 @@ fn test_ready_tasks_simulation() {
     // Simulate how the executor would determine which tasks to run
 
     let dag = DagBuilder::new("pipeline", "Pipeline")
-        .add_task(MockCommandTask::new("a", "echo", vec!["a"]))
-        .add_task(MockCommandTask::new("b", "echo", vec!["b"]))
-        .add_task_with_deps(MockCommandTask::new("c", "echo", vec!["c"]), &["a", "b"])
+        .add_task(MockCommandTask::create("a", "echo", vec!["a"]))
+        .add_task(MockCommandTask::create("b", "echo", vec!["b"]))
+        .add_task_with_deps(MockCommandTask::create("c", "echo", vec!["c"]), &["a", "b"])
         .build()
         .unwrap();
 
@@ -336,22 +335,22 @@ fn test_config_access() {
 #[test]
 fn test_diamond_dependency() {
     let dag = DagBuilder::new("report", "Report Pipeline")
-        .add_task(MockCommandTask::new(
+        .add_task(MockCommandTask::create(
             "fetch_users",
             "python",
             vec!["fetch_users.py"],
         ))
-        .add_task(MockCommandTask::new(
+        .add_task(MockCommandTask::create(
             "fetch_orders",
             "python",
             vec!["fetch_orders.py"],
         ))
         .add_task_with_deps(
-            MockCommandTask::new("join_data", "python", vec!["join.py"]),
+            MockCommandTask::create("join_data", "python", vec!["join.py"]),
             &["fetch_users", "fetch_orders"],
         )
         .add_task_with_deps(
-            MockCommandTask::new("generate_report", "python", vec!["report.py"]),
+            MockCommandTask::create("generate_report", "python", vec!["report.py"]),
             &["join_data"],
         )
         .build()
@@ -647,7 +646,7 @@ fn test_job_with_config() {
     use serde_json::json;
 
     let dag = DagBuilder::new("config_dag", "Config DAG")
-        .add_task(MockCommandTask::new("task1", "echo", vec!["test"]))
+        .add_task(MockCommandTask::create("task1", "echo", vec!["test"]))
         .build()
         .unwrap();
 

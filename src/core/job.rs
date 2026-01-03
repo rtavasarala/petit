@@ -34,20 +34,15 @@ pub enum JobError {
 }
 
 /// Condition for cross-job dependencies.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DependencyCondition {
     /// Dependent job's last run must have succeeded.
+    #[default]
     LastSuccess,
     /// Dependent job must have succeeded within the given duration.
     WithinWindow(Duration),
     /// Dependent job must have completed (success or failure).
     LastComplete,
-}
-
-impl Default for DependencyCondition {
-    fn default() -> Self {
-        Self::LastSuccess
-    }
 }
 
 /// A cross-job dependency.

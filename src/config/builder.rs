@@ -190,12 +190,12 @@ pub fn load_jobs_from_directory(dir: impl AsRef<Path>) -> Result<Vec<Job>, Confi
         let path = entry.path();
 
         // Only process .yaml and .yml files
-        if let Some(ext) = path.extension() {
-            if ext == "yaml" || ext == "yml" {
-                let config = YamlLoader::load_job_config(&path)?;
-                let job = JobConfigBuilder::build(config)?;
-                jobs.push(job);
-            }
+        if let Some(ext) = path.extension()
+            && (ext == "yaml" || ext == "yml")
+        {
+            let config = YamlLoader::load_job_config(&path)?;
+            let job = JobConfigBuilder::build(config)?;
+            jobs.push(job);
         }
     }
 

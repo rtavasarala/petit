@@ -376,9 +376,9 @@ async fn test_fan_out_pattern() {
     let c_order = task_c.order();
     let d_order = task_d.order();
 
-    assert!(b_order >= 1 && b_order <= 3);
-    assert!(c_order >= 1 && c_order <= 3);
-    assert!(d_order >= 1 && d_order <= 3);
+    assert!((1..=3).contains(&b_order));
+    assert!((1..=3).contains(&c_order));
+    assert!((1..=3).contains(&d_order));
 }
 
 /// Test: Fan-in pattern (multiple tasks feed into one).
