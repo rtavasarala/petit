@@ -380,12 +380,42 @@ impl<S: Storage + 'static> Scheduler<S> {
     }
 
     /// Recover interrupted runs from storage.
+    ///
+    /// For each incomplete run:
+    /// - Marks the run as interrupted
+    /// - Updates pending/running task states to failed ("Run was interrupted")
+    /// - Leaves completed task states unchanged
+    /// - Logs warnings for any task state update failures (non-blocking)
     pub async fn recover(&self) -> Result<Vec<RunId>, SchedulerError> {
         let incomplete_runs = self.storage.get_incomplete_runs().await?;
         let mut recovered = Vec::new();
 
         for run in incomplete_runs {
+            // Mark the run as interrupted
             self.storage.mark_run_interrupted(&run.id).await?;
+
+            // Mark all associated task states as failed to ensure consistency
+            if let Ok(task_states) = self.storage.list_task_states(&run.id).await {
+                for mut state in task_states {
+                    // Only update task states that are still pending or running
+                    if matches!(
+                        state.status,
+                        crate::storage::TaskRunStatus::Pending
+                            | crate::storage::TaskRunStatus::Running
+                    ) {
+                        state.mark_failed("Run was interrupted");
+                        if let Err(e) = self.storage.update_task_state(state.clone()).await {
+                            tracing::warn!(
+                                task_id = %state.task_id,
+                                run_id = %run.id,
+                                error = %e,
+                                "Failed to update task state during recovery"
+                            );
+                        }
+                    }
+                }
+            }
+
             recovered.push(run.id);
         }
 
