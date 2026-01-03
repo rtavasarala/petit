@@ -1,10 +1,10 @@
 //! Tab bar widget for navigation.
 
 use ratatui::{
+    Frame,
     layout::Rect,
     text::{Line, Span},
     widgets::Paragraph,
-    Frame,
 };
 
 use crate::tui::app::{App, Tab};

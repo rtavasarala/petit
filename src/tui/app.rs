@@ -219,19 +219,19 @@ impl App {
 
     /// Refresh task states for selected run.
     async fn refresh_tasks(&mut self) {
-        if let Some(run_idx) = self.runs_list_state.selected() {
-            if let Some(run) = self.runs.get(run_idx) {
-                match self.reader.list_task_states(&run.id).await {
-                    Ok(tasks) => {
-                        let was_empty = self.tasks.is_empty();
-                        self.tasks = tasks;
-                        if was_empty && !self.tasks.is_empty() {
-                            self.tasks_list_state.select(Some(0));
-                        }
+        if let Some(run_idx) = self.runs_list_state.selected()
+            && let Some(run) = self.runs.get(run_idx)
+        {
+            match self.reader.list_task_states(&run.id).await {
+                Ok(tasks) => {
+                    let was_empty = self.tasks.is_empty();
+                    self.tasks = tasks;
+                    if was_empty && !self.tasks.is_empty() {
+                        self.tasks_list_state.select(Some(0));
                     }
-                    Err(e) => {
-                        self.error_message = Some(format!("Tasks error: {}", e));
-                    }
+                }
+                Err(e) => {
+                    self.error_message = Some(format!("Tasks error: {}", e));
                 }
             }
         }

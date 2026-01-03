@@ -1,8 +1,8 @@
 //! API request handlers.
 
 use axum::{
-    extract::{Path, Query, State},
     Json,
+    extract::{Path, Query, State},
 };
 use serde::Deserialize;
 use std::collections::HashMap;

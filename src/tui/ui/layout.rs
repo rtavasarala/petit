@@ -1,8 +1,8 @@
 //! Main layout rendering.
 
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
     Frame,
+    layout::{Constraint, Direction, Layout, Rect},
 };
 
 use crate::tui::app::{App, Tab};

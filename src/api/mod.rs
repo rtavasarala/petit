@@ -11,8 +11,8 @@ pub use handlers::ApiState;
 pub use responses::*;
 
 use axum::{
-    routing::{get, post},
     Router,
+    routing::{get, post},
 };
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -104,10 +104,7 @@ pub fn create_api_state<S: Storage>(
     storage: Arc<S>,
     jobs: Vec<Job>,
 ) -> ApiState<S> {
-    let jobs_map: HashMap<JobId, Job> = jobs
-        .into_iter()
-        .map(|j| (j.id().clone(), j))
-        .collect();
+    let jobs_map: HashMap<JobId, Job> = jobs.into_iter().map(|j| (j.id().clone(), j)).collect();
 
     ApiState {
         handle,

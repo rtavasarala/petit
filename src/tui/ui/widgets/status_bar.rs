@@ -1,11 +1,11 @@
 //! Status bar widget showing dashboard statistics.
 
 use ratatui::{
+    Frame,
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
-    Frame,
 };
 
 use crate::tui::app::App;
@@ -14,17 +14,19 @@ use crate::tui::theme::Theme;
 /// Render the status bar.
 pub fn render(app: &App, frame: &mut Frame, area: Rect) {
     let mut spans = vec![
-        Span::styled(" petit-tui ", Style::default().fg(Theme::ACCENT).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            " petit-tui ",
+            Style::default()
+                .fg(Theme::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::raw("│ "),
         Span::styled(
             format!("Jobs: {}", app.stats.total_jobs),
             Style::default().fg(Theme::TEXT),
         ),
         Span::raw(" "),
-        Span::styled(
-            format!("({})", app.stats.enabled_jobs),
-            Theme::text_dim(),
-        ),
+        Span::styled(format!("({})", app.stats.enabled_jobs), Theme::text_dim()),
     ];
 
     // Running indicator
@@ -32,7 +34,9 @@ pub fn render(app: &App, frame: &mut Frame, area: Rect) {
         spans.push(Span::raw(" │ "));
         spans.push(Span::styled(
             format!("Running: {}", app.stats.running_now),
-            Style::default().fg(Theme::RUNNING).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Theme::RUNNING)
+                .add_modifier(Modifier::BOLD),
         ));
     }
 

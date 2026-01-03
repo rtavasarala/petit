@@ -1,11 +1,11 @@
 //! Runs tab renderer.
 
 use ratatui::{
+    Frame,
     layout::Rect,
     style::Modifier,
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem},
-    Frame,
 };
 
 use crate::storage::RunStatus;
@@ -34,7 +34,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
             // Duration
             let duration = run
                 .duration
-                .map(|d| App::format_duration(d))
+                .map(App::format_duration)
                 .unwrap_or_else(|| "-".to_string());
 
             // Time ago
@@ -47,10 +47,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
                 } else {
                     error.clone()
                 };
-                vec![
-                    Span::raw(" │ "),
-                    Span::styled(truncated, Theme::failure()),
-                ]
+                vec![Span::raw(" │ "), Span::styled(truncated, Theme::failure())]
             } else {
                 vec![]
             };

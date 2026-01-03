@@ -1,11 +1,11 @@
 //! Tasks tab renderer.
 
 use ratatui::{
+    Frame,
     layout::Rect,
     style::Modifier,
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, Paragraph},
-    Frame,
 };
 
 use crate::storage::TaskRunStatus;
@@ -44,7 +44,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
             // Duration
             let duration = task
                 .duration
-                .map(|d| App::format_duration(d))
+                .map(App::format_duration)
                 .unwrap_or_else(|| "-".to_string());
 
             // Attempts
@@ -61,10 +61,7 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
                 } else {
                     error.clone()
                 };
-                vec![
-                    Span::raw(" │ "),
-                    Span::styled(truncated, Theme::failure()),
-                ]
+                vec![Span::raw(" │ "), Span::styled(truncated, Theme::failure())]
             } else {
                 vec![]
             };
@@ -82,7 +79,11 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
         .collect();
 
     let title = if let Some(run) = app.selected_run() {
-        format!(" Tasks for run {} ({}) ", &run.id.to_string()[..8], app.tasks.len())
+        format!(
+            " Tasks for run {} ({}) ",
+            &run.id.to_string()[..8],
+            app.tasks.len()
+        )
     } else {
         format!(" Tasks ({}) ", app.tasks.len())
     };

@@ -1,11 +1,11 @@
 //! Help overlay widget showing full keybinding reference.
 
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
-    Frame,
 };
 
 use crate::tui::theme::Theme;
@@ -19,13 +19,15 @@ pub fn render(frame: &mut Frame, area: Rect) {
     frame.render_widget(Clear, overlay_area);
 
     let help_text = vec![
-        Line::from(vec![
-            Span::styled("Keybindings", Style::default().add_modifier(Modifier::BOLD)),
-        ]),
+        Line::from(vec![Span::styled(
+            "Keybindings",
+            Style::default().add_modifier(Modifier::BOLD),
+        )]),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("Navigation", Style::default().add_modifier(Modifier::UNDERLINED)),
-        ]),
+        Line::from(vec![Span::styled(
+            "Navigation",
+            Style::default().add_modifier(Modifier::UNDERLINED),
+        )]),
         Line::from(""),
         key_line("Tab / Shift+Tab", "Switch between tabs"),
         key_line("j / Down", "Move selection down"),
@@ -33,24 +35,27 @@ pub fn render(frame: &mut Frame, area: Rect) {
         key_line("g", "Go to top of list"),
         key_line("G", "Go to bottom of list"),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("Actions", Style::default().add_modifier(Modifier::UNDERLINED)),
-        ]),
+        Line::from(vec![Span::styled(
+            "Actions",
+            Style::default().add_modifier(Modifier::UNDERLINED),
+        )]),
         Line::from(""),
         key_line("Enter", "Drill down (Jobs -> Runs -> Tasks)"),
         key_line("Backspace", "Go back"),
         key_line("r", "Force refresh"),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("General", Style::default().add_modifier(Modifier::UNDERLINED)),
-        ]),
+        Line::from(vec![Span::styled(
+            "General",
+            Style::default().add_modifier(Modifier::UNDERLINED),
+        )]),
         Line::from(""),
         key_line("q / Esc", "Quit"),
         key_line("?", "Toggle this help"),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("Press any key to close", Theme::text_dim()),
-        ]),
+        Line::from(vec![Span::styled(
+            "Press any key to close",
+            Theme::text_dim(),
+        )]),
     ];
 
     let block = Block::default()

@@ -364,7 +364,7 @@ mod tests {
     }
 
     impl TestTask {
-        fn new(name: &str) -> Arc<dyn Task> {
+        fn create(name: &str) -> Arc<dyn Task> {
             Arc::new(Self {
                 name: name.to_string(),
             })
@@ -395,7 +395,7 @@ mod tests {
     #[test]
     fn test_add_single_task() {
         let mut dag = Dag::new("dag", "DAG");
-        let task = TestTask::new("task_a");
+        let task = TestTask::create("task_a");
 
         dag.add_task(task).unwrap();
 
@@ -407,8 +407,8 @@ mod tests {
     fn test_add_task_with_dependency() {
         let mut dag = Dag::new("dag", "DAG");
 
-        dag.add_task(TestTask::new("task_a")).unwrap();
-        dag.add_task(TestTask::new("task_b")).unwrap();
+        dag.add_task(TestTask::create("task_a")).unwrap();
+        dag.add_task(TestTask::create("task_b")).unwrap();
         dag.add_dependency(&TaskId::new("task_b"), &TaskId::new("task_a"))
             .unwrap();
 
@@ -422,9 +422,9 @@ mod tests {
         // A -> B -> C (linear chain)
         let mut dag = Dag::new("dag", "DAG");
 
-        dag.add_task(TestTask::new("A")).unwrap();
-        dag.add_task(TestTask::new("B")).unwrap();
-        dag.add_task(TestTask::new("C")).unwrap();
+        dag.add_task(TestTask::create("A")).unwrap();
+        dag.add_task(TestTask::create("B")).unwrap();
+        dag.add_task(TestTask::create("C")).unwrap();
 
         dag.add_dependency(&TaskId::new("B"), &TaskId::new("A"))
             .unwrap();
@@ -446,9 +446,9 @@ mod tests {
     fn test_detect_cycle() {
         let mut dag = Dag::new("dag", "DAG");
 
-        dag.add_task(TestTask::new("A")).unwrap();
-        dag.add_task(TestTask::new("B")).unwrap();
-        dag.add_task(TestTask::new("C")).unwrap();
+        dag.add_task(TestTask::create("A")).unwrap();
+        dag.add_task(TestTask::create("B")).unwrap();
+        dag.add_task(TestTask::create("C")).unwrap();
 
         // Create cycle: A -> B -> C -> A
         dag.add_dependency(&TaskId::new("B"), &TaskId::new("A"))
@@ -466,7 +466,7 @@ mod tests {
     fn test_detect_missing_dependency() {
         let mut dag = Dag::new("dag", "DAG");
 
-        dag.add_task(TestTask::new("A")).unwrap();
+        dag.add_task(TestTask::create("A")).unwrap();
 
         let result = dag.add_dependency(&TaskId::new("A"), &TaskId::new("nonexistent"));
         assert!(matches!(result, Err(DagError::MissingDependency { .. })));
@@ -476,13 +476,13 @@ mod tests {
     fn test_task_conditions() {
         let mut dag = Dag::new("dag", "DAG");
 
-        dag.add_task_with_condition(TestTask::new("always"), TaskCondition::Always)
+        dag.add_task_with_condition(TestTask::create("always"), TaskCondition::Always)
             .unwrap();
-        dag.add_task_with_condition(TestTask::new("on_success"), TaskCondition::AllSuccess)
+        dag.add_task_with_condition(TestTask::create("on_success"), TaskCondition::AllSuccess)
             .unwrap();
-        dag.add_task_with_condition(TestTask::new("on_failure"), TaskCondition::OnFailure)
+        dag.add_task_with_condition(TestTask::create("on_failure"), TaskCondition::OnFailure)
             .unwrap();
-        dag.add_task_with_condition(TestTask::new("all_done"), TaskCondition::AllDone)
+        dag.add_task_with_condition(TestTask::create("all_done"), TaskCondition::AllDone)
             .unwrap();
 
         assert_eq!(
@@ -508,10 +508,10 @@ mod tests {
         // Diamond: A -> B, C -> D
         let mut dag = Dag::new("dag", "DAG");
 
-        dag.add_task(TestTask::new("A")).unwrap();
-        dag.add_task(TestTask::new("B")).unwrap();
-        dag.add_task(TestTask::new("C")).unwrap();
-        dag.add_task(TestTask::new("D")).unwrap();
+        dag.add_task(TestTask::create("A")).unwrap();
+        dag.add_task(TestTask::create("B")).unwrap();
+        dag.add_task(TestTask::create("C")).unwrap();
+        dag.add_task(TestTask::create("D")).unwrap();
 
         dag.add_dependency(&TaskId::new("B"), &TaskId::new("A"))
             .unwrap();
@@ -548,9 +548,9 @@ mod tests {
     fn test_get_downstream_tasks() {
         let mut dag = Dag::new("dag", "DAG");
 
-        dag.add_task(TestTask::new("A")).unwrap();
-        dag.add_task(TestTask::new("B")).unwrap();
-        dag.add_task(TestTask::new("C")).unwrap();
+        dag.add_task(TestTask::create("A")).unwrap();
+        dag.add_task(TestTask::create("B")).unwrap();
+        dag.add_task(TestTask::create("C")).unwrap();
 
         dag.add_dependency(&TaskId::new("B"), &TaskId::new("A"))
             .unwrap();
@@ -568,9 +568,9 @@ mod tests {
     #[test]
     fn test_dag_builder() {
         let dag = DagBuilder::new("pipeline", "Data Pipeline")
-            .add_task(TestTask::new("extract"))
-            .add_task_with_deps(TestTask::new("transform"), &["extract"])
-            .add_task_with_deps(TestTask::new("load"), &["transform"])
+            .add_task(TestTask::create("extract"))
+            .add_task_with_deps(TestTask::create("transform"), &["extract"])
+            .add_task_with_deps(TestTask::create("load"), &["transform"])
             .build()
             .unwrap();
 
@@ -585,8 +585,8 @@ mod tests {
     fn test_duplicate_task_error() {
         let mut dag = Dag::new("dag", "DAG");
 
-        dag.add_task(TestTask::new("A")).unwrap();
-        let result = dag.add_task(TestTask::new("A"));
+        dag.add_task(TestTask::create("A")).unwrap();
+        let result = dag.add_task(TestTask::create("A"));
 
         assert!(matches!(result, Err(DagError::DuplicateTask(_))));
     }
@@ -595,8 +595,8 @@ mod tests {
     fn test_validate_dag() {
         let mut dag = Dag::new("dag", "DAG");
 
-        dag.add_task(TestTask::new("A")).unwrap();
-        dag.add_task(TestTask::new("B")).unwrap();
+        dag.add_task(TestTask::create("A")).unwrap();
+        dag.add_task(TestTask::create("B")).unwrap();
         dag.add_dependency(&TaskId::new("B"), &TaskId::new("A"))
             .unwrap();
 

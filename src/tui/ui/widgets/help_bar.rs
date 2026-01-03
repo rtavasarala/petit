@@ -1,10 +1,10 @@
 //! Help bar widget showing keybindings.
 
 use ratatui::{
+    Frame,
     layout::Rect,
     text::{Line, Span},
     widgets::Paragraph,
-    Frame,
 };
 
 use crate::tui::theme::Theme;
@@ -34,8 +34,5 @@ pub fn render(frame: &mut Frame, area: Rect) {
 
 /// Create a key hint span.
 fn key_hint(key: &str, action: &str) -> Span<'static> {
-    Span::styled(
-        format!("{}: {}", key, action),
-        Theme::text_dim(),
-    )
+    Span::styled(format!("{}: {}", key, action), Theme::text_dim())
 }

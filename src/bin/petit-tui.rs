@@ -11,12 +11,12 @@ use std::time::Duration;
 use clap::Parser;
 use crossterm::{
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use ratatui::{backend::CrosstermBackend, Terminal};
+use ratatui::{Terminal, backend::CrosstermBackend};
 
-use petit::tui::{App, AppEvent, EventLoop, TuiError, TuiReader};
 use petit::tui::ui::render;
+use petit::tui::{App, AppEvent, EventLoop, TuiError, TuiReader};
 
 /// Petit TUI - Monitor your orchestrator in the terminal.
 #[derive(Parser)]
@@ -54,7 +54,9 @@ async fn main() -> Result<(), TuiError> {
     // Restore terminal
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    terminal.show_cursor().map_err(|e| TuiError::Terminal(e.to_string()))?;
+    terminal
+        .show_cursor()
+        .map_err(|e| TuiError::Terminal(e.to_string()))?;
 
     result
 }

@@ -252,7 +252,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 Some(ApiConfig::new(api_host, api_port))
             };
-            run_scheduler(jobs_dir, max_jobs, max_tasks, tick_interval, None::<PathBuf>, api_config).await?;
+            run_scheduler(
+                jobs_dir,
+                max_jobs,
+                max_tasks,
+                tick_interval,
+                None::<PathBuf>,
+                api_config,
+            )
+            .await?;
         }
         #[cfg(all(not(feature = "sqlite"), not(feature = "api")))]
         Commands::Run {
@@ -261,7 +269,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             max_tasks,
             tick_interval,
         } => {
-            run_scheduler(jobs_dir, max_jobs, max_tasks, tick_interval, None::<PathBuf>, ()).await?;
+            run_scheduler(
+                jobs_dir,
+                max_jobs,
+                max_tasks,
+                tick_interval,
+                None::<PathBuf>,
+                (),
+            )
+            .await?;
         }
         Commands::Validate { jobs_dir } => {
             validate_jobs(jobs_dir)?;
@@ -270,7 +286,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             list_jobs(jobs_dir)?;
         }
         #[cfg(feature = "sqlite")]
-        Commands::Trigger { jobs_dir, job_id, db } => {
+        Commands::Trigger {
+            jobs_dir,
+            job_id,
+            db,
+        } => {
             trigger_job(jobs_dir, job_id, db).await?;
         }
         #[cfg(not(feature = "sqlite"))]
@@ -330,11 +350,29 @@ async fn run_scheduler(
     let scheduler_task = if let Some(db) = db_path {
         info!("Using SQLite storage: {}", db.display());
         let storage = Arc::new(SqliteStorage::new(&db).await?);
-        run_scheduler_with_storage(storage, jobs, event_bus, dag_executor, tick_interval, max_jobs, api_config).await
+        run_scheduler_with_storage(
+            storage,
+            jobs,
+            event_bus,
+            dag_executor,
+            tick_interval,
+            max_jobs,
+            api_config,
+        )
+        .await
     } else {
         info!("Using in-memory storage");
         let storage = Arc::new(InMemoryStorage::new());
-        run_scheduler_with_storage(storage, jobs, event_bus, dag_executor, tick_interval, max_jobs, api_config).await
+        run_scheduler_with_storage(
+            storage,
+            jobs,
+            event_bus,
+            dag_executor,
+            tick_interval,
+            max_jobs,
+            api_config,
+        )
+        .await
     };
 
     #[cfg(not(feature = "sqlite"))]
@@ -342,7 +380,16 @@ async fn run_scheduler(
         let _ = db_path; // suppress unused warning
         info!("Using in-memory storage");
         let storage = Arc::new(InMemoryStorage::new());
-        run_scheduler_with_storage(storage, jobs, event_bus, dag_executor, tick_interval, max_jobs, api_config).await
+        run_scheduler_with_storage(
+            storage,
+            jobs,
+            event_bus,
+            dag_executor,
+            tick_interval,
+            max_jobs,
+            api_config,
+        )
+        .await
     };
 
     scheduler_task
@@ -396,11 +443,27 @@ async fn run_scheduler(
     let scheduler_task = if let Some(db) = db_path {
         info!("Using SQLite storage: {}", db.display());
         let storage = Arc::new(SqliteStorage::new(&db).await?);
-        run_scheduler_with_storage_no_api(storage, jobs, event_bus, dag_executor, tick_interval, max_jobs).await
+        run_scheduler_with_storage_no_api(
+            storage,
+            jobs,
+            event_bus,
+            dag_executor,
+            tick_interval,
+            max_jobs,
+        )
+        .await
     } else {
         info!("Using in-memory storage");
         let storage = Arc::new(InMemoryStorage::new());
-        run_scheduler_with_storage_no_api(storage, jobs, event_bus, dag_executor, tick_interval, max_jobs).await
+        run_scheduler_with_storage_no_api(
+            storage,
+            jobs,
+            event_bus,
+            dag_executor,
+            tick_interval,
+            max_jobs,
+        )
+        .await
     };
 
     #[cfg(not(feature = "sqlite"))]
@@ -408,7 +471,15 @@ async fn run_scheduler(
         let _ = db_path; // suppress unused warning
         info!("Using in-memory storage");
         let storage = Arc::new(InMemoryStorage::new());
-        run_scheduler_with_storage_no_api(storage, jobs, event_bus, dag_executor, tick_interval, max_jobs).await
+        run_scheduler_with_storage_no_api(
+            storage,
+            jobs,
+            event_bus,
+            dag_executor,
+            tick_interval,
+            max_jobs,
+        )
+        .await
     };
 
     scheduler_task
@@ -595,10 +666,10 @@ struct CompletionWatcher {
 #[async_trait::async_trait]
 impl EventHandler for CompletionWatcher {
     async fn handle(&self, event: &petit::Event) {
-        if let petit::Event::JobCompleted { job_id, .. } = event {
-            if job_id.as_str() == self.target_job_id {
-                self.completed.notify_one();
-            }
+        if let petit::Event::JobCompleted { job_id, .. } = event
+            && job_id.as_str() == self.target_job_id
+        {
+            self.completed.notify_one();
         }
     }
 }

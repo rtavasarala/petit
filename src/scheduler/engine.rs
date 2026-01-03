@@ -233,6 +233,7 @@ pub struct Scheduler<S: Storage> {
     /// Maximum concurrent jobs overall (None = unlimited).
     max_concurrent_jobs: Option<usize>,
     /// Currently running job handles mapped to (JobId, Handle).
+    #[allow(clippy::type_complexity)]
     running_jobs: Arc<RwLock<HashMap<RunId, (JobId, JoinHandle<()>)>>>,
 }
 
@@ -330,22 +331,18 @@ impl<S: Storage + 'static> Scheduler<S> {
     /// Sync registered jobs to storage for visibility by TUI and other tools.
     async fn sync_jobs_to_storage(&self) {
         for job in self.jobs.values() {
-            let mut stored = StoredJob::new(
-                job.id().clone(),
-                job.name(),
-                job.dag().id().clone(),
-            )
-            .with_enabled(job.is_enabled());
+            let mut stored = StoredJob::new(job.id().clone(), job.name(), job.dag().id().clone())
+                .with_enabled(job.is_enabled());
 
             if let Some(schedule) = job.schedule() {
                 stored = stored.with_schedule(schedule.expression());
             }
 
             // Try to save, ignore duplicate errors (job already exists)
-            if let Err(e) = self.storage.save_job(stored).await {
-                if !matches!(e, StorageError::DuplicateKey(_)) {
-                    tracing::warn!(job_id = %job.id(), error = %e, "Failed to sync job to storage");
-                }
+            if let Err(e) = self.storage.save_job(stored).await
+                && !matches!(e, StorageError::DuplicateKey(_))
+            {
+                tracing::warn!(job_id = %job.id(), error = %e, "Failed to sync job to storage");
             }
         }
     }

@@ -31,12 +31,11 @@ impl EventLoop {
         tokio::spawn(async move {
             loop {
                 // Poll for keyboard events with a short timeout
-                if event::poll(Duration::from_millis(50)).unwrap_or(false) {
-                    if let Ok(Event::Key(key)) = event::read() {
-                        if tx_input.send(AppEvent::Key(key)).await.is_err() {
-                            break;
-                        }
-                    }
+                if event::poll(Duration::from_millis(50)).unwrap_or(false)
+                    && let Ok(Event::Key(key)) = event::read()
+                    && tx_input.send(AppEvent::Key(key)).await.is_err()
+                {
+                    break;
                 }
             }
         });

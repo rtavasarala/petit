@@ -24,9 +24,10 @@ pub struct RetryPolicy {
 }
 
 /// Conditions under which a task should be retried.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RetryCondition {
     /// Retry on any error.
+    #[default]
     Always,
 
     /// Retry only on transient errors (timeouts, resource unavailable).
@@ -91,12 +92,6 @@ impl Default for RetryPolicy {
     /// Default policy: no retries.
     fn default() -> Self {
         Self::none()
-    }
-}
-
-impl Default for RetryCondition {
-    fn default() -> Self {
-        RetryCondition::Always
     }
 }
 

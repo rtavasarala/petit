@@ -107,6 +107,7 @@ impl TuiReader {
 
     /// List all jobs.
     pub async fn list_jobs(&self) -> Result<Vec<StoredJob>, TuiError> {
+        #[allow(clippy::type_complexity)]
         let rows: Vec<(String, String, String, Option<String>, bool, String, String)> =
             sqlx::query_as(
                 "SELECT id, name, dag_id, schedule, enabled, created_at, updated_at
@@ -136,6 +137,7 @@ impl TuiReader {
 
     /// Get the most recent run for a job.
     async fn get_last_run(&self, job_id: &JobId) -> Result<Option<StoredRun>, TuiError> {
+        #[allow(clippy::type_complexity)]
         let row: Option<(
             String,
             String,
@@ -163,6 +165,7 @@ impl TuiReader {
         limit: usize,
         offset: usize,
     ) -> Result<Vec<StoredRun>, TuiError> {
+        #[allow(clippy::type_complexity)]
         let rows: Vec<(
             String,
             String,
@@ -188,6 +191,7 @@ impl TuiReader {
 
     /// List all recent runs across all jobs.
     pub async fn list_recent_runs(&self, limit: usize) -> Result<Vec<StoredRun>, TuiError> {
+        #[allow(clippy::type_complexity)]
         let rows: Vec<(
             String,
             String,
@@ -211,6 +215,7 @@ impl TuiReader {
 
     /// List task states for a run.
     pub async fn list_task_states(&self, run_id: &RunId) -> Result<Vec<StoredTaskState>, TuiError> {
+        #[allow(clippy::type_complexity)]
         let rows: Vec<(
             String,
             String,
@@ -234,6 +239,7 @@ impl TuiReader {
 
     /// Get currently running runs.
     pub async fn get_running_runs(&self) -> Result<Vec<StoredRun>, TuiError> {
+        #[allow(clippy::type_complexity)]
         let rows: Vec<(
             String,
             String,
@@ -273,6 +279,7 @@ fn row_to_job(row: (String, String, String, Option<String>, bool, String, String
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn row_to_run(
     row: (
         String,
@@ -295,6 +302,7 @@ fn row_to_run(
     }
 }
 
+#[allow(clippy::type_complexity)]
 fn row_to_task_state(
     row: (
         String,

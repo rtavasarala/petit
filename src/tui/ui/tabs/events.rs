@@ -3,11 +3,11 @@
 //! Shows recent activity as a log of run state changes.
 
 use ratatui::{
+    Frame,
     layout::Rect,
     style::Modifier,
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem},
-    Frame,
 };
 
 use crate::storage::RunStatus;
@@ -45,9 +45,12 @@ pub fn render(app: &mut App, frame: &mut Frame, area: Rect) {
 
             let spans = vec![
                 Span::styled(format!("{} ", timestamp), Theme::text_dim()),
-                Span::styled(format!("{:<12}", event_type), event_style.add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!("{:<12}", event_type),
+                    event_style.add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" "),
-                Span::styled(format!("{}", run.job_id.as_str()), Theme::text()),
+                Span::styled(run.job_id.as_str().to_string(), Theme::text()),
                 Span::styled(duration_info, Theme::text_dim()),
             ];
 
