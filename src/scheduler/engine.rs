@@ -485,7 +485,10 @@ impl<S: Storage + 'static> Scheduler<S> {
             // Get the last run of the dependency job
             let runs = match self.storage.list_runs(dep_job_id, 1).await {
                 Ok(runs) => runs,
-                Err(_) => return false,
+                Err(e) => {
+                    tracing::warn!(job_id = %job.id(), dep_job_id = %dep_job_id, error = %e, "Failed to list runs for dependency check");
+                    return false;
+                }
             };
 
             if runs.is_empty() {
@@ -585,7 +588,9 @@ impl<S: Storage + 'static> Scheduler<S> {
             // Initialize task states
             for task_id in job.dag().task_ids() {
                 let state = StoredTaskState::new(task_id.clone(), run_id_clone.clone());
-                let _ = storage.save_task_state(state).await;
+                if let Err(e) = storage.save_task_state(state).await {
+                    tracing::warn!(task_id = %task_id, run_id = %run_id_clone, error = %e, "Failed to save initial task state");
+                }
             }
 
             // Create a job-local event bus that:
@@ -620,7 +625,9 @@ impl<S: Storage + 'static> Scheduler<S> {
                 } else {
                     run.mark_failed(format!("{} tasks failed", result.failed_count()));
                 }
-                let _ = storage.update_run(run).await;
+                if let Err(e) = storage.update_run(run).await {
+                    tracing::warn!(run_id = %run_id_clone, error = %e, "Failed to update run status");
+                }
             }
 
             // Emit JobCompleted event
