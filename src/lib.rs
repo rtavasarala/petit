@@ -6,6 +6,12 @@ pub mod scheduler;
 pub mod storage;
 pub mod testing;
 
+#[cfg(feature = "api")]
+pub mod api;
+
+#[cfg(feature = "tui")]
+pub mod tui;
+
 pub use core::context::{ContextError, ContextReader, ContextWriter, TaskContext};
 pub use core::dag::{Dag, DagBuilder, DagError, TaskCondition, TaskNode};
 pub use core::environment::Environment;
@@ -39,3 +45,6 @@ pub use testing::{
     Timeline, TimelineEntry, TimelineEventType, TrackedTask,
 };
 pub use scheduler::{Scheduler, SchedulerError, SchedulerHandle, SchedulerState};
+
+#[cfg(feature = "api")]
+pub use api::{ApiConfig, ApiState, build_router, create_api_state, start_server};

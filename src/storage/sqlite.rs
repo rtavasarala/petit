@@ -28,7 +28,11 @@ impl SqliteStorage {
         let path_str = path.as_ref().to_string_lossy();
         let options = SqliteConnectOptions::from_str(&format!("sqlite:{}", path_str))
             .map_err(|e| StorageError::Other(e.to_string()))?
-            .create_if_missing(true);
+            .create_if_missing(true)
+            // WAL mode allows concurrent readers while writing
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+            // Wait up to 5 seconds for locks instead of failing immediately
+            .busy_timeout(Duration::from_secs(5));
 
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
