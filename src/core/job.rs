@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
@@ -233,7 +233,7 @@ impl Job {
     /// Checks that:
     /// - The DAG is valid
     /// - All dependency job IDs are provided in known_jobs
-    pub fn validate(&self, known_jobs: &[JobId]) -> Result<(), JobError> {
+    pub fn validate(&self, known_jobs: &HashSet<JobId>) -> Result<(), JobError> {
         // Validate DAG
         self.dag
             .validate()
@@ -505,7 +505,8 @@ mod tests {
         let dag = create_etl_dag();
         let job = Job::new("valid_job", "Valid Job", dag);
 
-        let result = job.validate(&[]);
+        let known_jobs = HashSet::new();
+        let result = job.validate(&known_jobs);
         assert!(result.is_ok());
     }
 
@@ -515,7 +516,9 @@ mod tests {
         let job = Job::new("dep_job", "Dependent Job", dag)
             .with_dependency(JobDependency::new(JobId::new("nonexistent")));
 
-        let result = job.validate(&[JobId::new("other_job")]);
+        let mut known_jobs = HashSet::new();
+        known_jobs.insert(JobId::new("other_job"));
+        let result = job.validate(&known_jobs);
         assert!(matches!(result, Err(JobError::MissingDependency(_))));
     }
 
@@ -525,7 +528,10 @@ mod tests {
         let job = Job::new("dep_job", "Dependent Job", dag)
             .with_dependency(JobDependency::new(JobId::new("upstream")));
 
-        let result = job.validate(&[JobId::new("upstream"), JobId::new("other")]);
+        let mut known_jobs = HashSet::new();
+        known_jobs.insert(JobId::new("upstream"));
+        known_jobs.insert(JobId::new("other"));
+        let result = job.validate(&known_jobs);
         assert!(result.is_ok());
     }
 
