@@ -242,10 +242,17 @@ impl DagExecutor {
                         };
                         let task_duration = task_start.elapsed();
 
-                        // Merge outputs back to shared store
+                        // Merge only task-specific outputs back to shared store.
+                        // This prevents parallel tasks from overwriting each other's
+                        // updates by merging stale snapshots of the entire store.
+                        // Only keys namespaced to this task (prefixed with "{task_id}.")
+                        // are merged back.
+                        let task_prefix = format!("{}.", task_id);
                         if let Ok(outputs) = task_store.read() {
                             for (key, value) in outputs.iter() {
-                                let _ = store.set_raw(key, value.clone());
+                                if key.starts_with(&task_prefix) {
+                                    let _ = store.set_raw(key, value.clone());
+                                }
                             }
                         }
 
@@ -954,5 +961,125 @@ mod tests {
         assert!(result_b.success);
         assert_eq!(result_a.attempts, 1);
         assert_eq!(result_b.attempts, 1);
+    }
+
+    // Task that writes a value after a delay
+    struct DelayedWriteTask {
+        name: String,
+        value: i32,
+        delay: Duration,
+    }
+
+    impl DelayedWriteTask {
+        fn new(name: &str, value: i32, delay: Duration) -> Arc<Self> {
+            Arc::new(Self {
+                name: name.to_string(),
+                value,
+                delay,
+            })
+        }
+    }
+
+    #[async_trait]
+    impl Task for DelayedWriteTask {
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        async fn execute(&self, ctx: &mut TaskContext) -> Result<(), TaskError> {
+            tokio::time::sleep(self.delay).await;
+            ctx.outputs.set("value", self.value)?;
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_parallel_tasks_do_not_overwrite_each_others_context() {
+        // Regression test for issue #126: parallel task output merge can overwrite
+        // shared context updates.
+        //
+        // Scenario:
+        // - Tasks B and C run in parallel after A completes
+        // - B finishes quickly and writes b.value = 1
+        // - C finishes later and writes c.value = 2
+        // - Both values should be preserved (C's stale snapshot should not
+        //   overwrite B's output)
+        let executor = DagExecutor::with_concurrency(4);
+
+        // A is a quick root task
+        let task_a = SimpleTask::new("a");
+        // B writes quickly
+        let task_b = DelayedWriteTask::new("b", 1, Duration::from_millis(10));
+        // C writes after a longer delay
+        let task_c = DelayedWriteTask::new("c", 2, Duration::from_millis(50));
+
+        let dag = DagBuilder::new("parallel_context", "Parallel Context Test")
+            .add_task(task_a)
+            .add_task_with_deps(task_b, &["a"])
+            .add_task_with_deps(task_c, &["a"])
+            .build()
+            .unwrap();
+
+        let mut ctx = create_shared_context();
+        let result = executor.execute(&dag, &mut ctx).await;
+
+        assert!(result.success);
+        assert_eq!(result.completed_count(), 3);
+
+        // Both B and C's outputs should be present
+        let b_value: i32 = ctx.inputs.get("b.value").expect("b.value should exist");
+        let c_value: i32 = ctx.inputs.get("c.value").expect("c.value should exist");
+
+        assert_eq!(b_value, 1, "b.value should not be overwritten");
+        assert_eq!(c_value, 2, "c.value should be set correctly");
+    }
+
+    #[tokio::test]
+    async fn test_parallel_tasks_with_many_writes_preserve_all_outputs() {
+        // More comprehensive test: many parallel tasks each writing their own key
+        let executor = DagExecutor::with_concurrency(8);
+
+        let task_root = SimpleTask::new("root");
+
+        let dag = DagBuilder::new("many_parallel", "Many Parallel Writes")
+            .add_task(task_root)
+            .add_task_with_deps(
+                DelayedWriteTask::new("t1", 1, Duration::from_millis(10)),
+                &["root"],
+            )
+            .add_task_with_deps(
+                DelayedWriteTask::new("t2", 2, Duration::from_millis(20)),
+                &["root"],
+            )
+            .add_task_with_deps(
+                DelayedWriteTask::new("t3", 3, Duration::from_millis(30)),
+                &["root"],
+            )
+            .add_task_with_deps(
+                DelayedWriteTask::new("t4", 4, Duration::from_millis(15)),
+                &["root"],
+            )
+            .add_task_with_deps(
+                DelayedWriteTask::new("t5", 5, Duration::from_millis(25)),
+                &["root"],
+            )
+            .build()
+            .unwrap();
+
+        let mut ctx = create_shared_context();
+        let result = executor.execute(&dag, &mut ctx).await;
+
+        assert!(result.success);
+        assert_eq!(result.completed_count(), 6);
+
+        // All task outputs should be preserved
+        for i in 1..=5 {
+            let key = format!("t{}.value", i);
+            let value: i32 = ctx
+                .inputs
+                .get(&key)
+                .unwrap_or_else(|_| panic!("{} should exist", key));
+            assert_eq!(value, i, "{} should have value {}", key, i);
+        }
     }
 }
