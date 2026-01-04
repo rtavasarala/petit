@@ -246,6 +246,8 @@ pub struct Scheduler<S: Storage> {
     /// Currently running job handles mapped to (JobId, Handle).
     #[allow(clippy::type_complexity)]
     running_jobs: Arc<RwLock<HashMap<RunId, (JobId, JoinHandle<()>)>>>,
+    /// Graceful shutdown timeout (default: 30 seconds).
+    shutdown_timeout: Duration,
 }
 
 impl<S: Storage + 'static> Scheduler<S> {
@@ -259,6 +261,7 @@ impl<S: Storage + 'static> Scheduler<S> {
             tick_interval: Duration::from_secs(1),
             max_concurrent_jobs: None,
             running_jobs: Arc::new(RwLock::new(HashMap::new())),
+            shutdown_timeout: Duration::from_secs(30),
         }
     }
 
@@ -272,6 +275,7 @@ impl<S: Storage + 'static> Scheduler<S> {
             tick_interval: Duration::from_secs(1),
             max_concurrent_jobs: None,
             running_jobs: Arc::new(RwLock::new(HashMap::new())),
+            shutdown_timeout: Duration::from_secs(30),
         }
     }
 
@@ -296,6 +300,12 @@ impl<S: Storage + 'static> Scheduler<S> {
     /// Set the maximum concurrent jobs.
     pub fn with_max_concurrent_jobs(mut self, max: usize) -> Self {
         self.max_concurrent_jobs = Some(max);
+        self
+    }
+
+    /// Set the graceful shutdown timeout.
+    pub fn with_shutdown_timeout(mut self, timeout: Duration) -> Self {
+        self.shutdown_timeout = timeout;
         self
     }
 
@@ -380,12 +390,42 @@ impl<S: Storage + 'static> Scheduler<S> {
     }
 
     /// Recover interrupted runs from storage.
+    ///
+    /// For each incomplete run:
+    /// - Marks the run as interrupted
+    /// - Updates pending/running task states to failed ("Run was interrupted")
+    /// - Leaves completed task states unchanged
+    /// - Logs warnings for any task state update failures (non-blocking)
     pub async fn recover(&self) -> Result<Vec<RunId>, SchedulerError> {
         let incomplete_runs = self.storage.get_incomplete_runs().await?;
         let mut recovered = Vec::new();
 
         for run in incomplete_runs {
+            // Mark the run as interrupted
             self.storage.mark_run_interrupted(&run.id).await?;
+
+            // Mark all associated task states as failed to ensure consistency
+            if let Ok(task_states) = self.storage.list_task_states(&run.id).await {
+                for mut state in task_states {
+                    // Only update task states that are still pending or running
+                    if matches!(
+                        state.status,
+                        crate::storage::TaskRunStatus::Pending
+                            | crate::storage::TaskRunStatus::Running
+                    ) {
+                        state.mark_failed("Run was interrupted");
+                        if let Err(e) = self.storage.update_task_state(state.clone()).await {
+                            tracing::warn!(
+                                task_id = %state.task_id,
+                                run_id = %run.id,
+                                error = %e,
+                                "Failed to update task state during recovery"
+                            );
+                        }
+                    }
+                }
+            }
+
             recovered.push(run.id);
         }
 
@@ -438,6 +478,11 @@ impl<S: Storage + 'static> Scheduler<S> {
                         SchedulerCommand::Shutdown { response } => {
                             let mut s = state.write().await;
                             *s = SchedulerState::Stopped;
+                            drop(s); // Release the lock before waiting
+
+                            // Wait for running jobs to complete with timeout
+                            self.await_running_jobs().await;
+
                             let _ = response.send(());
                             break;
                         }
@@ -474,7 +519,9 @@ impl<S: Storage + 'static> Scheduler<S> {
                         // Check dependencies before triggering
                         if self.check_dependencies(job).await {
                             tracing::info!(job_id = %job.id(), "Triggering scheduled job");
-                            let _ = self.trigger_job(job.id()).await;
+                            if let Err(e) = self.trigger_job(job.id()).await {
+                                tracing::warn!(job_id = %job.id(), error = %e, "Failed to trigger scheduled job");
+                            }
                         }
                     }
                 }
@@ -494,7 +541,10 @@ impl<S: Storage + 'static> Scheduler<S> {
                 .await
             {
                 Ok(runs) => runs,
-                Err(_) => return false,
+                Err(e) => {
+                    tracing::warn!(job_id = %job.id(), dep_job_id = %dep_job_id, error = %e, "Failed to list runs for dependency check");
+                    return false;
+                }
             };
 
             if runs.is_empty() {
@@ -595,7 +645,9 @@ impl<S: Storage + 'static> Scheduler<S> {
             // Initialize task states
             for task_id in job.dag().task_ids() {
                 let state = StoredTaskState::new(task_id.clone(), run_id_clone.clone());
-                let _ = storage.save_task_state(state).await;
+                if let Err(e) = storage.save_task_state(state).await {
+                    tracing::warn!(task_id = %task_id, run_id = %run_id_clone, error = %e, "Failed to save initial task state");
+                }
             }
 
             // Create a job-local event bus that:
@@ -630,7 +682,9 @@ impl<S: Storage + 'static> Scheduler<S> {
                 } else {
                     run.mark_failed(format!("{} tasks failed", result.failed_count()));
                 }
-                let _ = storage.update_run(run).await;
+                if let Err(e) = storage.update_run(run).await {
+                    tracing::warn!(run_id = %run_id_clone, error = %e, "Failed to update run status");
+                }
             }
 
             // Emit JobCompleted event
@@ -666,6 +720,52 @@ impl<S: Storage + 'static> Scheduler<S> {
     async fn cleanup_finished_jobs(&self) {
         let mut running = self.running_jobs.write().await;
         running.retain(|_, (_, handle)| !handle.is_finished());
+    }
+
+    /// Wait for all running jobs to complete with a timeout.
+    async fn await_running_jobs(&self) {
+        let running_count = self.running_jobs.read().await.len();
+
+        if running_count == 0 {
+            tracing::info!("No running jobs to wait for during shutdown");
+            return;
+        }
+
+        tracing::info!(
+            "Graceful shutdown: waiting for {} running job(s) to complete (timeout: {:?})",
+            running_count,
+            self.shutdown_timeout
+        );
+
+        let start = tokio::time::Instant::now();
+        let deadline = start + self.shutdown_timeout;
+
+        loop {
+            // Check if all jobs are done
+            let mut running = self.running_jobs.write().await;
+            running.retain(|_, (_, handle)| !handle.is_finished());
+            let remaining = running.len();
+            drop(running);
+
+            if remaining == 0 {
+                let elapsed = start.elapsed();
+                tracing::info!("All running jobs completed gracefully in {:?}", elapsed);
+                break;
+            }
+
+            // Check if we've exceeded the timeout
+            if tokio::time::Instant::now() >= deadline {
+                tracing::warn!(
+                    "Graceful shutdown timeout ({:?}) exceeded with {} job(s) still running",
+                    self.shutdown_timeout,
+                    remaining
+                );
+                break;
+            }
+
+            // Wait a bit before checking again
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     }
 }
 
@@ -1136,6 +1236,358 @@ mod tests {
         // Now downstream should work (upstream completed within window)
         let result = handle.trigger("downstream").await;
         assert!(result.is_ok());
+
+        handle.shutdown().await.unwrap();
+        let _ = task.await;
+    }
+
+    // ==========================================================================
+    // Storage Error Handling Tests
+    // ==========================================================================
+
+    mod failing_storage {
+        use super::*;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        /// A storage wrapper that can be configured to fail specific operations.
+        /// Wraps InMemoryStorage and selectively returns errors.
+        pub struct FailingStorage {
+            inner: InMemoryStorage,
+            fail_list_runs: AtomicBool,
+            fail_update_task_state: AtomicBool,
+            fail_save_task_state: AtomicBool,
+            fail_upsert_job: AtomicBool,
+            fail_list_jobs: AtomicBool,
+            fail_update_run: AtomicBool,
+        }
+
+        impl FailingStorage {
+            pub fn new() -> Self {
+                Self {
+                    inner: InMemoryStorage::new(),
+                    fail_list_runs: AtomicBool::new(false),
+                    fail_update_task_state: AtomicBool::new(false),
+                    fail_save_task_state: AtomicBool::new(false),
+                    fail_upsert_job: AtomicBool::new(false),
+                    fail_list_jobs: AtomicBool::new(false),
+                    fail_update_run: AtomicBool::new(false),
+                }
+            }
+
+            pub fn set_fail_list_runs(&self, fail: bool) {
+                self.fail_list_runs.store(fail, Ordering::SeqCst);
+            }
+
+            pub fn set_fail_update_task_state(&self, fail: bool) {
+                self.fail_update_task_state.store(fail, Ordering::SeqCst);
+            }
+
+            pub fn set_fail_save_task_state(&self, fail: bool) {
+                self.fail_save_task_state.store(fail, Ordering::SeqCst);
+            }
+
+            pub fn set_fail_upsert_job(&self, fail: bool) {
+                self.fail_upsert_job.store(fail, Ordering::SeqCst);
+            }
+
+            pub fn set_fail_list_jobs(&self, fail: bool) {
+                self.fail_list_jobs.store(fail, Ordering::SeqCst);
+            }
+
+            pub fn set_fail_update_run(&self, fail: bool) {
+                self.fail_update_run.store(fail, Ordering::SeqCst);
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl Storage for FailingStorage {
+            async fn save_job(&self, job: StoredJob) -> Result<(), StorageError> {
+                self.inner.save_job(job).await
+            }
+
+            async fn upsert_job(&self, job: StoredJob) -> Result<(), StorageError> {
+                if self.fail_upsert_job.load(Ordering::SeqCst) {
+                    return Err(StorageError::Other("injected upsert_job error".into()));
+                }
+                self.inner.upsert_job(job).await
+            }
+
+            async fn get_job(&self, id: &JobId) -> Result<StoredJob, StorageError> {
+                self.inner.get_job(id).await
+            }
+
+            async fn list_jobs(&self) -> Result<Vec<StoredJob>, StorageError> {
+                if self.fail_list_jobs.load(Ordering::SeqCst) {
+                    return Err(StorageError::Other("injected list_jobs error".into()));
+                }
+                self.inner.list_jobs().await
+            }
+
+            async fn delete_job(&self, id: &JobId) -> Result<(), StorageError> {
+                self.inner.delete_job(id).await
+            }
+
+            async fn save_run(&self, run: StoredRun) -> Result<(), StorageError> {
+                self.inner.save_run(run).await
+            }
+
+            async fn get_run(&self, id: &RunId) -> Result<StoredRun, StorageError> {
+                self.inner.get_run(id).await
+            }
+
+            async fn list_runs(
+                &self,
+                job_id: &JobId,
+                limit: usize,
+            ) -> Result<Vec<StoredRun>, StorageError> {
+                if self.fail_list_runs.load(Ordering::SeqCst) {
+                    return Err(StorageError::Other("injected list_runs error".into()));
+                }
+                self.inner.list_runs(job_id, limit).await
+            }
+
+            async fn update_run(&self, run: StoredRun) -> Result<(), StorageError> {
+                if self.fail_update_run.load(Ordering::SeqCst) {
+                    return Err(StorageError::Other("injected update_run error".into()));
+                }
+                self.inner.update_run(run).await
+            }
+
+            async fn get_incomplete_runs(&self) -> Result<Vec<StoredRun>, StorageError> {
+                self.inner.get_incomplete_runs().await
+            }
+
+            async fn mark_run_interrupted(&self, id: &RunId) -> Result<(), StorageError> {
+                self.inner.mark_run_interrupted(id).await
+            }
+
+            async fn save_task_state(&self, state: StoredTaskState) -> Result<(), StorageError> {
+                if self.fail_save_task_state.load(Ordering::SeqCst) {
+                    return Err(StorageError::Other("injected save_task_state error".into()));
+                }
+                self.inner.save_task_state(state).await
+            }
+
+            async fn get_task_state(
+                &self,
+                run_id: &RunId,
+                task_id: &TaskId,
+            ) -> Result<StoredTaskState, StorageError> {
+                self.inner.get_task_state(run_id, task_id).await
+            }
+
+            async fn list_task_states(
+                &self,
+                run_id: &RunId,
+            ) -> Result<Vec<StoredTaskState>, StorageError> {
+                self.inner.list_task_states(run_id).await
+            }
+
+            async fn update_task_state(&self, state: StoredTaskState) -> Result<(), StorageError> {
+                if self.fail_update_task_state.load(Ordering::SeqCst) {
+                    return Err(StorageError::Other(
+                        "injected update_task_state error".into(),
+                    ));
+                }
+                self.inner.update_task_state(state).await
+            }
+        }
+    }
+
+    use failing_storage::FailingStorage;
+
+    #[tokio::test]
+    async fn test_check_dependencies_returns_false_on_storage_error() {
+        // When list_runs fails, check_dependencies should return false
+        // and log a warning (behavior unchanged from before error logging was added)
+        let storage = Arc::new(FailingStorage::new());
+        let mut scheduler = Scheduler::with_storage(Arc::clone(&storage));
+
+        // Upstream job
+        let upstream = create_job("upstream", "Upstream Job");
+        scheduler.register(upstream);
+
+        // Downstream depends on upstream
+        let downstream = create_job("downstream", "Downstream Job")
+            .with_dependency(JobDependency::new(JobId::new("upstream")));
+        scheduler.register(downstream);
+
+        // Configure storage to fail list_runs
+        storage.set_fail_list_runs(true);
+
+        let (handle, task) = scheduler.start().await;
+
+        // Downstream should fail with DependencyNotSatisfied because
+        // check_dependencies returns false when storage errors occur
+        let result = handle.trigger("downstream").await;
+        assert!(
+            matches!(result, Err(SchedulerError::DependencyNotSatisfied(_))),
+            "Expected DependencyNotSatisfied error when storage fails, got: {:?}",
+            result
+        );
+
+        handle.shutdown().await.unwrap();
+        let _ = task.await;
+    }
+
+    #[tokio::test]
+    async fn test_job_execution_continues_when_save_task_state_fails() {
+        // When save_task_state fails during job execution, the job should still complete
+        // and only log warnings (not fail the job)
+        let storage = Arc::new(FailingStorage::new());
+        let event_bus = EventBus::new();
+        let handler = RecordingHandler::new();
+        event_bus.register(handler.clone()).await;
+
+        let mut scheduler = Scheduler::with_storage(Arc::clone(&storage)).with_event_bus(event_bus);
+
+        let job = create_job("test_job", "Test Job");
+        scheduler.register(job);
+
+        // Configure storage to fail save_task_state
+        storage.set_fail_save_task_state(true);
+
+        let (handle, task) = scheduler.start().await;
+
+        // Trigger the job - it should still execute successfully
+        let run_id = handle.trigger("test_job").await.unwrap();
+        assert!(!run_id.as_uuid().is_nil());
+
+        // Wait for execution
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // Job should still emit completion events even though task state saving failed
+        let events = handler.events().await;
+        let has_completed = events
+            .iter()
+            .any(|e| matches!(e, Event::JobCompleted { .. }));
+        assert!(
+            has_completed,
+            "Job should complete even when save_task_state fails"
+        );
+
+        handle.shutdown().await.unwrap();
+        let _ = task.await;
+    }
+
+    #[tokio::test]
+    async fn test_job_execution_continues_when_update_task_state_fails() {
+        // When update_task_state fails in TaskStateUpdater, the job should still complete
+        let storage = Arc::new(FailingStorage::new());
+        let event_bus = EventBus::new();
+        let handler = RecordingHandler::new();
+        event_bus.register(handler.clone()).await;
+
+        let mut scheduler = Scheduler::with_storage(Arc::clone(&storage)).with_event_bus(event_bus);
+
+        let job = create_job("test_job", "Test Job");
+        scheduler.register(job);
+
+        // Configure storage to fail update_task_state after the job starts
+        // (TaskStateUpdater uses this when handling TaskStarted/TaskCompleted events)
+        storage.set_fail_update_task_state(true);
+
+        let (handle, task) = scheduler.start().await;
+
+        // Trigger the job
+        let run_id = handle.trigger("test_job").await.unwrap();
+        assert!(!run_id.as_uuid().is_nil());
+
+        // Wait for execution
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // Job should still emit completion events
+        let events = handler.events().await;
+        let has_completed = events
+            .iter()
+            .any(|e| matches!(e, Event::JobCompleted { .. }));
+        assert!(
+            has_completed,
+            "Job should complete even when update_task_state fails"
+        );
+
+        handle.shutdown().await.unwrap();
+        let _ = task.await;
+    }
+
+    #[tokio::test]
+    async fn test_job_execution_continues_when_update_run_fails() {
+        // When update_run fails at the end of job execution, the job should still
+        // emit completion events (error is logged but doesn't block completion)
+        let storage = Arc::new(FailingStorage::new());
+        let event_bus = EventBus::new();
+        let handler = RecordingHandler::new();
+        event_bus.register(handler.clone()).await;
+
+        let mut scheduler = Scheduler::with_storage(Arc::clone(&storage)).with_event_bus(event_bus);
+
+        let job = create_job("test_job", "Test Job");
+        scheduler.register(job);
+
+        // Configure storage to fail update_run
+        storage.set_fail_update_run(true);
+
+        let (handle, task) = scheduler.start().await;
+
+        // Trigger the job
+        let run_id = handle.trigger("test_job").await.unwrap();
+        assert!(!run_id.as_uuid().is_nil());
+
+        // Wait for execution
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // Job should still emit JobCompleted event even when update_run fails
+        let events = handler.events().await;
+        let has_completed = events
+            .iter()
+            .any(|e| matches!(e, Event::JobCompleted { .. }));
+        assert!(
+            has_completed,
+            "Job should emit JobCompleted event even when update_run fails"
+        );
+
+        handle.shutdown().await.unwrap();
+        let _ = task.await;
+    }
+
+    #[tokio::test]
+    async fn test_sync_jobs_to_storage_continues_on_upsert_error() {
+        // When upsert_job fails during sync_jobs_to_storage, it should log a warning
+        // and continue with other jobs (not panic or abort)
+        let storage = Arc::new(FailingStorage::new());
+        storage.set_fail_upsert_job(true);
+
+        let mut scheduler = Scheduler::with_storage(Arc::clone(&storage));
+
+        // Register multiple jobs
+        scheduler.register(create_job("job1", "Job 1"));
+        scheduler.register(create_job("job2", "Job 2"));
+
+        // Starting the scheduler should not panic even though upsert fails
+        let (handle, task) = scheduler.start().await;
+
+        // Scheduler should still be running
+        assert!(handle.is_running().await);
+
+        handle.shutdown().await.unwrap();
+        let _ = task.await;
+    }
+
+    #[tokio::test]
+    async fn test_sync_jobs_to_storage_continues_on_list_jobs_error() {
+        // When list_jobs fails during stale job cleanup, it should log a warning
+        // and continue (not panic or abort)
+        let storage = Arc::new(FailingStorage::new());
+        storage.set_fail_list_jobs(true);
+
+        let mut scheduler = Scheduler::with_storage(Arc::clone(&storage));
+        scheduler.register(create_job("job1", "Job 1"));
+
+        // Starting the scheduler should not panic even though list_jobs fails
+        let (handle, task) = scheduler.start().await;
+
+        // Scheduler should still be running
+        assert!(handle.is_running().await);
 
         handle.shutdown().await.unwrap();
         let _ = task.await;
