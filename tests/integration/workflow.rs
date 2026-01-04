@@ -132,7 +132,7 @@ async fn test_complete_workflow_define_and_execute() {
     let (handle, task) = scheduler.start().await;
     let run_id = handle.trigger("daily_etl").await.unwrap();
 
-    // 5. Wait for execution
+    // 5. Wait for execution to complete
     wait_for_run_status(
         storage.as_ref(),
         &run_id,
@@ -601,7 +601,7 @@ async fn test_task_retrying_events_emitted() {
     let (handle, task) = scheduler.start().await;
     let run_id = handle.trigger("retry_job").await.unwrap();
 
-    // Wait for execution (including retry delays)
+    // Wait for execution to complete (including retry delays)
     wait_for_run_status(
         storage.as_ref(),
         &run_id,
