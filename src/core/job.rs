@@ -160,7 +160,12 @@ impl Job {
     }
 
     /// Set the maximum concurrent runs.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `max` is zero. Use `JobBuilder` if you need error handling.
     pub fn with_max_concurrency(mut self, max: usize) -> Self {
+        assert!(max > 0, "max_concurrency cannot be zero");
         self.max_concurrency = Some(max);
         self
     }
@@ -308,7 +313,12 @@ impl JobBuilder {
     }
 
     /// Set maximum concurrent runs.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `max` is zero.
     pub fn max_concurrency(mut self, max: usize) -> Self {
+        assert!(max > 0, "max_concurrency cannot be zero");
         self.max_concurrency = Some(max);
         self
     }
@@ -324,6 +334,13 @@ impl JobBuilder {
         let dag = self
             .dag
             .ok_or(JobError::InvalidDag("DAG is required".into()))?;
+
+        // Validate max_concurrency is not zero
+        if self.max_concurrency == Some(0) {
+            return Err(JobError::InvalidConfig(
+                "max_concurrency cannot be zero".into(),
+            ));
+        }
 
         Ok(Job {
             id: self.id,
@@ -617,5 +634,49 @@ mod tests {
         assert!(debug_str.contains("test_dag")); // dag_id
         assert!(debug_str.contains("upstream")); // dependency
         assert!(debug_str.contains("max_concurrency: Some(2)"));
+    }
+
+    #[test]
+    #[should_panic(expected = "max_concurrency cannot be zero")]
+    fn test_job_with_max_concurrency_rejects_zero() {
+        let dag = create_simple_dag();
+        let _job =
+            Job::new("zero_concurrency", "Zero Concurrency Job", dag).with_max_concurrency(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "max_concurrency cannot be zero")]
+    fn test_job_builder_max_concurrency_rejects_zero() {
+        let dag = create_simple_dag();
+        let _job = JobBuilder::new("zero_concurrency", "Zero Concurrency Job")
+            .dag(dag)
+            .max_concurrency(0)
+            .build()
+            .unwrap();
+    }
+
+    #[test]
+    fn test_job_builder_validates_zero_concurrency_in_build() {
+        let dag = create_simple_dag();
+        // Directly set max_concurrency to 0 (bypassing the setter)
+        let mut builder = JobBuilder::new("zero_concurrency", "Zero Concurrency Job");
+        builder.dag = Some(dag);
+        builder.max_concurrency = Some(0);
+
+        let result = builder.build();
+        assert!(matches!(result, Err(JobError::InvalidConfig(_))));
+        if let Err(JobError::InvalidConfig(msg)) = result {
+            assert!(msg.contains("max_concurrency cannot be zero"));
+        }
+    }
+
+    #[test]
+    fn test_job_with_max_concurrency_accepts_positive_values() {
+        let dag = create_simple_dag();
+        let job1 = Job::new("job1", "Job 1", dag.clone()).with_max_concurrency(1);
+        assert_eq!(job1.max_concurrency(), Some(1));
+
+        let job2 = Job::new("job2", "Job 2", dag).with_max_concurrency(100);
+        assert_eq!(job2.max_concurrency(), Some(100));
     }
 }
