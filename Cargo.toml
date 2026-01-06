@@ -7,10 +7,12 @@ description = "A minimal, lightweight task orchestrator with cron-like schedulin
 [[bin]]
 name = "pt"
 path = "src/main.rs"
+bench = false
 
 [lib]
 name = "petit"
 path = "src/lib.rs"
+bench = false
 
 [dependencies]
 async-trait = "0.1"
@@ -21,8 +23,8 @@ serde_yaml = "0.9"
 thiserror = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 sqlx = { version = "0.8", features = [
-    "runtime-tokio",
-    "sqlite",
+  "runtime-tokio",
+  "sqlite",
 ], optional = true }
 cron = "0.15"
 chrono = { version = "0.4", features = ["serde"] }
@@ -30,10 +32,10 @@ chrono-tz = "0.10"
 clap = { version = "4", features = ["derive", "env"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-toml = "0.8"
+toml = "0.9.10+spec-1.1.0"
 dirs = "6"
-ratatui = { version = "0.29", optional = true }
-crossterm = { version = "0.28", optional = true }
+ratatui = { version = "0.30", optional = true }
+crossterm = { version = "0.29", optional = true }
 axum = { version = "0.8", optional = true }
 tower-http = { version = "0.6", features = ["cors", "trace"], optional = true }
 
@@ -43,6 +45,19 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+criterion = { version = "0.8.1", features = ["async_tokio"] }
+
+[[bench]]
+name = "dag_execution"
+harness = false
+
+[[bench]]
+name = "scheduler"
+harness = false
+
+[[bench]]
+name = "storage"
+harness = false
 
 [features]
 default = ["api"]
@@ -54,3 +69,4 @@ api = ["axum", "tower-http"]
 name = "petit-tui"
 path = "src/bin/petit-tui.rs"
 required-features = ["tui"]
+bench = false
