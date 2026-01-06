@@ -1,7 +1,8 @@
 //! Task execution context and inter-task communication.
 //!
-//! Tasks communicate via a shared key-value store. The architecture separates
-//! reading (shared) from writing (buffered):
+//! Tasks communicate via an in-memory key-value store. The architecture
+//! separates reading (shared) from writing (buffered), and merges are
+//! last-write-wins for overlapping keys:
 //!
 //! - [`ContextStore`]: Shared read-only store of completed task outputs
 //! - [`OutputBuffer`]: Task-local write buffer, merged on successful completion
@@ -40,6 +41,9 @@ pub enum ContextError {
 ///
 /// This store is read-only for tasks. The executor merges task outputs
 /// after successful completion via [`merge`](Self::merge).
+///
+/// The store is in-memory and ephemeral; it is not meant for persistence
+/// or historical/audit data.
 ///
 /// # Thread Safety
 ///
@@ -99,6 +103,7 @@ impl ContextStore {
     ///
     /// This should only be called by the executor after successful task completion.
     /// All outputs in the buffer are atomically added to the store.
+    /// If a key already exists, the buffer's value overwrites it.
     pub fn merge(&self, buffer: &OutputBuffer) -> Result<(), ContextError> {
         let mut store = self.inner.write().map_err(|_| ContextError::LockPoisoned)?;
         let outputs = buffer.outputs.borrow();
@@ -130,12 +135,18 @@ impl ContextStore {
 /// merged into the shared [`ContextStore`] only after successful completion,
 /// ensuring failed tasks don't pollute the store.
 ///
+/// Use this for ephemeral, in-run data needed by downstream tasks. It is not
+/// a persistence or history mechanism.
+///
 /// # Key Namespacing
 ///
 /// All keys are automatically prefixed with the task ID. For example,
 /// calling `set("result", 42)` from task "extract" creates key "extract.result".
+///
+/// Note: This buffer is task-local and not thread-safe; do not share it across threads.
 pub struct OutputBuffer {
     task_id: TaskId,
+    // Task-local only: RefCell is !Sync, so OutputBuffer must not be shared across threads.
     outputs: RefCell<HashMap<String, Value>>,
 }
 
@@ -195,6 +206,9 @@ impl OutputBuffer {
 /// - Inputs from upstream tasks (via shared [`ContextStore`])
 /// - Output buffer for downstream tasks (via [`OutputBuffer`])
 /// - Job-level configuration
+///
+/// Tasks should write outputs via the local buffer, not directly to the
+/// shared store.
 pub struct TaskContext {
     /// Read inputs from upstream tasks (shared, read-only).
     pub inputs: ContextStore,
