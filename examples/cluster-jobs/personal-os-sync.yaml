@@ -1,0 +1,58 @@
+# Weekly personal-os financial data sync
+id: personal_os_sync
+name: Personal OS Sync
+schedule: "0 0 18 * * 5"  # 6 PM every Friday
+
+config:
+  personal_os_dir: /home/pedram/projects/personal-os
+
+tasks:
+  - id: questrade_sync
+    type: command
+    command: uv
+    args: ["run", "main.py"]
+    working_dir: /home/pedram/projects/personal-os/apps/questrade-sync
+    retry:
+      max_attempts: 3
+      delay: 60s
+
+  - id: monarch_sync
+    type: command
+    command: uv
+    args: ["run", "main.py"]
+    working_dir: /home/pedram/projects/personal-os/apps/monarch-sync
+    retry:
+      max_attempts: 3
+      delay: 60s
+
+  - id: generate_snapshot
+    type: command
+    command: python
+    args: ["scripts/generate-snapshot.py"]
+    working_dir: /home/pedram/projects/personal-os
+    depends_on: [questrade_sync, monarch_sync]
+    condition: all_success
+
+  - id: git_add
+    type: command
+    command: git
+    args: ["add", "-A"]
+    working_dir: /home/pedram/projects/personal-os
+    depends_on: [generate_snapshot]
+    condition: all_success
+
+  - id: git_commit
+    type: command
+    command: git
+    args: ["commit", "-m", "chore: weekly sync update"]
+    working_dir: /home/pedram/projects/personal-os
+    depends_on: [git_add]
+    condition: all_success
+
+  - id: git_push
+    type: command
+    command: git
+    args: ["push"]
+    working_dir: /home/pedram/projects/personal-os
+    depends_on: [git_commit]
+    condition: all_success

@@ -1,0 +1,16 @@
+# Weekly time synchronization across cluster
+id: time_sync
+name: Time Sync
+schedule: "0 0 3 * * 0"  # 3 AM every Sunday
+
+tasks:
+  - id: sync_time
+    type: command
+    command: ansible-playbook
+    args: ["-i", "/home/pedram/projects/compute-os/ansible/inventory.yml", "/home/pedram/projects/compute-os/ansible/playbooks/sync-time.yml"]
+
+  - id: verify
+    type: command
+    command: ansible
+    args: ["all", "-m", "command", "-a", "date", "-i", "/home/pedram/projects/compute-os/ansible/inventory.yml"]
+    depends_on: [sync_time]

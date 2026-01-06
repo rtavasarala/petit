@@ -1,0 +1,27 @@
+# Daily cluster health check
+id: cluster_health
+name: Cluster Health Check
+schedule: "0 0 2 * * *"  # 2 AM daily
+
+tasks:
+  - id: ping_nodes
+    type: command
+    command: ansible
+    args: ["all", "-m", "ping", "-i", "/home/pedram/projects/compute-os/ansible/inventory.yml"]
+
+  - id: k3s_nodes
+    type: command
+    command: kubectl
+    args: ["get", "nodes", "-o", "wide"]
+
+  - id: k3s_pods
+    type: command
+    command: kubectl
+    args: ["get", "pods", "-A", "--field-selector=status.phase!=Running,status.phase!=Succeeded"]
+    depends_on: [k3s_nodes]
+
+  - id: report
+    type: command
+    command: echo
+    args: ["Cluster health check completed"]
+    depends_on: [ping_nodes, k3s_pods]
