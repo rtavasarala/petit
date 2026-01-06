@@ -45,6 +45,7 @@ make fmt        # Format code with rustfmt
 make fmt-check  # Check formatting without modifying
 make lint       # Run clippy with warnings as errors
 make test       # Run all tests
+make bench      # Run benchmarks
 make check      # Quick compile check
 make build      # Build release binary
 make ci         # Run all CI checks (fmt-check, lint, test)
@@ -135,6 +136,34 @@ Integration tests in `tests/integration/` cover:
 - Workflow execution (`workflow.rs`)
 - Recovery scenarios (`recovery.rs`)
 - Resource contention (`resources.rs`)
+
+## Benchmarks
+
+The project includes benchmarks using [criterion](https://docs.rs/criterion) for measuring performance of core components.
+
+### Running Benchmarks
+
+```bash
+make bench              # Run all benchmarks
+cargo bench dag         # Run DAG-related benchmarks only
+cargo bench scheduler   # Run scheduler benchmarks only
+cargo bench storage     # Run storage benchmarks only
+```
+
+### Benchmark Structure
+
+```
+benches/
+├── dag_execution.rs    # DAG construction, topological sort, ready task detection
+├── scheduler.rs        # Cron parsing, next occurrence calculations
+└── storage.rs          # Storage backend CRUD and query operations
+```
+
+### Available Benchmarks
+
+- **dag_execution**: Measures DAG construction, validation, and topological sorting for various DAG shapes (linear, wide, diamond)
+- **scheduler**: Measures next N occurrence calculations for cron and interval schedules
+- **storage**: Measures in-memory storage list operations (jobs, runs, task states)
 
 ## API Endpoints
 
