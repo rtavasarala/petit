@@ -1,0 +1,27 @@
+# Daily NFS storage health check
+id: storage_check
+name: Storage Check
+schedule: "0 0 6 * * *"  # 6 AM daily
+
+tasks:
+  - id: check_nfs_disk
+    type: command
+    command: ssh
+    args: ["cube3", "df", "-h", "/mnt/sata"]
+
+  - id: check_nfs_exports
+    type: command
+    command: ssh
+    args: ["cube3", "showmount", "-e", "localhost"]
+
+  - id: check_mounts
+    type: command
+    command: ansible
+    args: ["k3s_cluster", "-m", "command", "-a", "df -h /mnt/nfs", "-i", "/home/pedram/projects/compute-os/ansible/inventory.yml"]
+    depends_on: [check_nfs_disk]
+
+  - id: report
+    type: command
+    command: echo
+    args: ["Storage check completed"]
+    depends_on: [check_nfs_exports, check_mounts]

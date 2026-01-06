@@ -1,0 +1,14 @@
+[Unit]
+Description=Petit Task Orchestrator
+After=network.target
+
+[Service]
+Type=simple
+User=pedram
+ExecStart=/home/pedram/bin/pt run /home/pedram/pt/jobs --db /home/pedram/pt/petit.db
+Restart=on-failure
+RestartSec=5
+WorkingDirectory=/home/pedram/pt
+
+[Install]
+WantedBy=multi-user.target

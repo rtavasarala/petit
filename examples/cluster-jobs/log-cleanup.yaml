@@ -1,0 +1,28 @@
+# Weekly log rotation and cleanup
+id: log_cleanup
+name: Log Cleanup
+schedule: "0 0 4 * * 6"  # 4 AM every Saturday
+
+tasks:
+  - id: rotate_logs
+    type: command
+    command: ansible
+    args: ["all", "-m", "command", "-a", "logrotate -f /etc/logrotate.conf", "-b", "-i", "/home/pedram/projects/compute-os/ansible/inventory.yml"]
+
+  - id: clean_old_logs
+    type: command
+    command: ansible
+    args: ["all", "-m", "shell", "-a", "find /var/log -name '*.gz' -mtime +30 -delete", "-b", "-i", "/home/pedram/projects/compute-os/ansible/inventory.yml"]
+    depends_on: [rotate_logs]
+
+  - id: clean_journal
+    type: command
+    command: ansible
+    args: ["all", "-m", "command", "-a", "journalctl --vacuum-time=7d", "-b", "-i", "/home/pedram/projects/compute-os/ansible/inventory.yml"]
+    depends_on: [rotate_logs]
+
+  - id: report
+    type: command
+    command: echo
+    args: ["Log cleanup completed"]
+    depends_on: [clean_old_logs, clean_journal]
