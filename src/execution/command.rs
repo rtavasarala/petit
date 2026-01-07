@@ -321,19 +321,31 @@ impl Task for CommandTask {
                     .take()
                     .ok_or_else(|| TaskError::ExecutionFailed("stderr not captured".to_string()))?;
 
-                // Race between waiting for completion and timeout
-                tokio::select! {
-                    result = child.wait() => {
-                        let status = result.map_err(|e| TaskError::ExecutionFailed(e.to_string()))?;
+                // Read stdout/stderr concurrently with waiting for the process.
+                // This is critical: if we wait() before reading, the subprocess can
+                // deadlock if it produces more output than the pipe buffer (~64KB).
+                use tokio::io::AsyncReadExt;
 
-                        // Read stdout and stderr
-                        use tokio::io::AsyncReadExt;
-                        let mut stdout_buf = Vec::new();
-                        let mut stderr_buf = Vec::new();
-                        stdout_handle.read_to_end(&mut stdout_buf).await
-                            .map_err(|e| TaskError::ExecutionFailed(e.to_string()))?;
-                        stderr_handle.read_to_end(&mut stderr_buf).await
-                            .map_err(|e| TaskError::ExecutionFailed(e.to_string()))?;
+                let read_stdout = async {
+                    let mut buf = Vec::new();
+                    stdout_handle.read_to_end(&mut buf).await.map(|_| buf)
+                };
+
+                let read_stderr = async {
+                    let mut buf = Vec::new();
+                    stderr_handle.read_to_end(&mut buf).await.map(|_| buf)
+                };
+
+                // Race between (wait + read pipes) and timeout
+                tokio::select! {
+                    result = async {
+                        // Run all three concurrently to avoid pipe buffer deadlock
+                        tokio::join!(child.wait(), read_stdout, read_stderr)
+                    } => {
+                        let (wait_result, stdout_result, stderr_result) = result;
+                        let status = wait_result.map_err(|e| TaskError::ExecutionFailed(e.to_string()))?;
+                        let stdout_buf = stdout_result.map_err(|e| TaskError::ExecutionFailed(e.to_string()))?;
+                        let stderr_buf = stderr_result.map_err(|e| TaskError::ExecutionFailed(e.to_string()))?;
 
                         std::process::Output {
                             status,
@@ -342,8 +354,10 @@ impl Task for CommandTask {
                         }
                     }
                     _ = tokio::time::sleep(duration) => {
-                        // Timeout occurred - kill the process to prevent orphaned processes
+                        // Timeout occurred - kill the process and reap it to prevent zombies.
+                        // kill() only sends SIGKILL; we must wait() to fully reap the process.
                         let _ = child.kill().await;
+                        let _ = child.wait().await;
 
                         return Err(TaskError::Timeout(duration));
                     }
