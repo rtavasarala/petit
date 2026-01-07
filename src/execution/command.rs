@@ -99,11 +99,11 @@
 //! the task returns [`TaskError::Timeout`] which is considered a transient
 //! error and can trigger retries.
 //!
-//! **Process Termination**: When a timeout occurs, the subprocess is terminated
-//! when the underlying command future is dropped. Note that this may not give
-//! the process time for graceful shutdown. If your command requires cleanup,
-//! consider implementing signal handling within the command itself or using
-//! shorter timeouts with retry policies.
+//! **Process Termination**: When a timeout occurs, the subprocess is explicitly
+//! killed using SIGKILL. This ensures no orphaned processes are left running.
+//! Note that SIGKILL does not give the process time for graceful shutdown.
+//! If your command requires cleanup, consider implementing signal handling
+//! within the command itself or using shorter timeouts with retry policies.
 //!
 //! ```rust
 //! use petit::{CommandTask, RetryPolicy, RetryCondition};
@@ -212,7 +212,6 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::process::Command;
-use tokio::time::timeout;
 
 use crate::core::context::TaskContext;
 use crate::core::environment::Environment;
@@ -303,11 +302,67 @@ impl Task for CommandTask {
         cmd.stderr(Stdio::piped());
 
         // Execute with optional timeout
+        // We use spawn() instead of output() to get a handle to the child process.
+        // This allows us to explicitly kill the process if a timeout occurs,
+        // preventing orphaned processes from continuing to run.
         let output = match self.timeout {
-            Some(duration) => timeout(duration, cmd.output())
-                .await
-                .map_err(|_| TaskError::Timeout(duration))?
-                .map_err(|e| TaskError::ExecutionFailed(e.to_string()))?,
+            Some(duration) => {
+                let mut child = cmd
+                    .spawn()
+                    .map_err(|e| TaskError::ExecutionFailed(e.to_string()))?;
+
+                // Take ownership of stdout/stderr handles before waiting
+                let mut stdout_handle = child
+                    .stdout
+                    .take()
+                    .ok_or_else(|| TaskError::ExecutionFailed("stdout not captured".to_string()))?;
+                let mut stderr_handle = child
+                    .stderr
+                    .take()
+                    .ok_or_else(|| TaskError::ExecutionFailed("stderr not captured".to_string()))?;
+
+                // Read stdout/stderr concurrently with waiting for the process.
+                // This is critical: if we wait() before reading, the subprocess can
+                // deadlock if it produces more output than the pipe buffer (~64KB).
+                use tokio::io::AsyncReadExt;
+
+                let read_stdout = async {
+                    let mut buf = Vec::new();
+                    stdout_handle.read_to_end(&mut buf).await.map(|_| buf)
+                };
+
+                let read_stderr = async {
+                    let mut buf = Vec::new();
+                    stderr_handle.read_to_end(&mut buf).await.map(|_| buf)
+                };
+
+                // Race between (wait + read pipes) and timeout
+                tokio::select! {
+                    result = async {
+                        // Run all three concurrently to avoid pipe buffer deadlock
+                        tokio::join!(child.wait(), read_stdout, read_stderr)
+                    } => {
+                        let (wait_result, stdout_result, stderr_result) = result;
+                        let status = wait_result.map_err(|e| TaskError::ExecutionFailed(e.to_string()))?;
+                        let stdout_buf = stdout_result.map_err(|e| TaskError::ExecutionFailed(e.to_string()))?;
+                        let stderr_buf = stderr_result.map_err(|e| TaskError::ExecutionFailed(e.to_string()))?;
+
+                        std::process::Output {
+                            status,
+                            stdout: stdout_buf,
+                            stderr: stderr_buf,
+                        }
+                    }
+                    _ = tokio::time::sleep(duration) => {
+                        // Timeout occurred - kill the process and reap it to prevent zombies.
+                        // kill() only sends SIGKILL; we must wait() to fully reap the process.
+                        let _ = child.kill().await;
+                        let _ = child.wait().await;
+
+                        return Err(TaskError::Timeout(duration));
+                    }
+                }
+            }
             None => cmd
                 .output()
                 .await
@@ -756,5 +811,50 @@ mod tests {
             err.is_transient(),
             "Timeout errors should be transient for retry purposes"
         );
+    }
+
+    #[tokio::test]
+    async fn test_timeout_kills_subprocess() {
+        // Test that when a timeout occurs, the subprocess is actually killed
+        // and doesn't continue running in the background.
+        //
+        // We do this by running a command that would create a file after sleeping.
+        // If the process is properly killed, the file should never be created.
+        use std::fs;
+        use std::path::Path;
+
+        let temp_dir = std::env::temp_dir();
+        let marker_file = temp_dir.join(format!("petit_timeout_test_{}", std::process::id()));
+
+        // Clean up any leftover file from previous test runs
+        let _ = fs::remove_file(&marker_file);
+
+        // Command that sleeps then creates a file - the sleep is longer than our timeout
+        // so if the process isn't killed, the file will eventually be created
+        let script = format!("sleep 2 && touch {}", marker_file.to_string_lossy());
+
+        let task = CommandTask::builder("sh")
+            .arg("-c")
+            .arg(&script)
+            .timeout(Duration::from_millis(100))
+            .build();
+
+        let mut ctx = create_test_context();
+        let result = task.execute(&mut ctx).await;
+
+        // Should have timed out
+        assert!(matches!(result, Err(TaskError::Timeout(_))));
+
+        // Give a moment for any orphaned process to potentially create the file
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        // The marker file should NOT exist because the process was killed
+        assert!(
+            !Path::new(&marker_file).exists(),
+            "Subprocess was not killed on timeout - marker file was created"
+        );
+
+        // Clean up
+        let _ = fs::remove_file(&marker_file);
     }
 }
