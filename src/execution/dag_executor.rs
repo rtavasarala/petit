@@ -327,7 +327,9 @@ impl DagExecutor {
             .map(|(id, _)| id.clone())
             .collect();
 
-        let success = failed_tasks.is_empty() && skipped_tasks.is_empty();
+        // Only actual task failures determine DAG success - skipped tasks
+        // (due to conditions like OnFailure/AllSuccess) are expected behavior
+        let success = failed_tasks.is_empty();
         let duration = start_time.elapsed();
 
         debug!(
@@ -816,6 +818,10 @@ mod tests {
 
         // B was skipped, but that's expected for OnFailure when upstream succeeds
         // We consider this a success since no task actually failed
+        assert!(
+            result.success,
+            "DAG should succeed when skipped tasks are due to conditions"
+        );
         assert_eq!(
             result.task_statuses.get(&TaskId::new("a")),
             Some(&TaskStatus::Completed)
